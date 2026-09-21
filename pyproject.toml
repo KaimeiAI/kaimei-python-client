@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kaimei"
+dynamic = ["version"]
+description = "Official Python client for the Kaimei (解明) explainability API."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Kaimei AI" }]
+keywords = ["kaimei", "xai", "explainability", "interpretability", "machine-learning", "shap"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dependencies = [
+  "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "respx>=0.21"]
+
+[project.urls]
+Homepage = "https://kaimei.ai"
+Documentation = "https://github.com/KaimeiAI/kaimei-python-client#readme"
+Repository = "https://github.com/KaimeiAI/kaimei-python-client"
+Issues = "https://github.com/KaimeiAI/kaimei-python-client/issues"
+API = "https://github.com/KaimeiAI/kaimei"
+
+[tool.hatch.version]
+path = "src/kaimei/client.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kaimei"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["src", "tests"]
