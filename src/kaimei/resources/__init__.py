@@ -6,6 +6,7 @@ from .insights import Insights
 from .models import Models
 from .organization import Organization
 from .predictions import Predictions
+from .projects import Projects
 
 __all__ = [
     "Analyses",
@@ -16,4 +17,5 @@ __all__ = [
     "Models",
     "Organization",
     "Predictions",
+    "Projects",
 ]

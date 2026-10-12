@@ -44,6 +44,29 @@ client = Kaimei(api_key="km_test_...", base_url="http://localhost:8000")
 
 `KAIMEI_API_KEY` and `KAIMEI_BASE_URL` are read from the environment when arguments are omitted.
 
+## Upload a trained model from a notebook
+
+The client reads the live estimator in your process (sklearn, Keras / TensorFlow,
+PyTorch, trees / forests) and uploads the layers and learned weights as JSON.
+Kaimei does not store the original ``.h5`` / ``.pt`` file.
+
+```python
+from kaimei import Kaimei
+
+client = Kaimei(api_key="km_live_...", base_url="http://localhost:8000")
+
+model = client.models.upload(
+    clf,  # a fitted estimator
+    name="Churn net",
+    feature_names=["tenure", "spend", "tickets"],  # optional if the estimator knows them
+    X=X_train,   # optional reference rows for explanations
+    y=y_train,
+)
+# Open the dashboard — the architecture scene shows every layer and tensor.
+```
+
+Attach weights to a model you already registered with ``client.models.upload_structure(model.id, clf)``.
+
 ## What you can do
 
 ```python
@@ -63,8 +86,8 @@ client.models.create(
 # Log a prediction your own stack already made
 client.predictions.create(model="credit-risk-v3", input={...}, output={"score": 0.81})
 
-# Explain one input (Shapley by default; LIME or pre-computed attributions also accepted)
-client.explanations.create(model="credit-risk-v3", input={...}, method="shapley")
+# Explain one input. method is "shap" (KernelSHAP), "shapley", or "lime".
+client.explanations.create(model="credit-risk-v3", input={...}, method="shap")
 
 # Study the model as a whole, then read the insights
 analysis = client.analyses.create(model="credit-risk-v3", type="full")

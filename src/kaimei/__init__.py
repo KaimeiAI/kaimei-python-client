@@ -15,6 +15,7 @@ Then::
     )
 """
 
+from ._objects import APIObject, Page
 from .client import Kaimei, __version__
 from .errors import (
     APIConnectionError,
@@ -25,7 +26,7 @@ from .errors import (
     PermissionError,
     RateLimitError,
 )
-from ._objects import APIObject, Page
+from .structure import StructureError, estimator_to_spec
 
 __all__ = [
     "Kaimei",
@@ -38,5 +39,7 @@ __all__ = [
     "APIStatusError",
     "APIObject",
     "Page",
+    "StructureError",
+    "estimator_to_spec",
     "__version__",
 ]

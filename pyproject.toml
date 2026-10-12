@@ -30,7 +30,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "respx>=0.21"]
+dev = ["pytest>=7", "respx>=0.21", "numpy>=1.24"]
+models = ["numpy>=1.24"]
 
 [project.urls]
 Homepage = "https://kaimei.ai"
@@ -53,3 +54,7 @@ addopts = "-q"
 line-length = 100
 target-version = "py39"
 src = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/kaimei/structure.py" = ["E501"]
+"src/kaimei/__init__.py" = ["RUF022"]

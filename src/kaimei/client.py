@@ -14,6 +14,7 @@ from .resources.insights import Insights
 from .resources.models import Models
 from .resources.organization import Organization
 from .resources.predictions import Predictions
+from .resources.projects import Projects
 
 __version__ = "0.1.0"
 
@@ -56,6 +57,7 @@ class Kaimei:
         )
         self.explanations = Explanations(self)
         self.models = Models(self)
+        self.projects = Projects(self)
         self.predictions = Predictions(self)
         self.analyses = Analyses(self)
         self.insights = Insights(self)

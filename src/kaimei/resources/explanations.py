@@ -22,6 +22,12 @@ class Explanations(Resource):
         metadata: Optional[Mapping[str, Any]] = None,
         **extra: Any,
     ):
+        """Create an explanation.
+
+        ``method`` is ``shap`` (KernelSHAP), ``shapley`` (permutation sampling),
+        ``lime`` (tabular features or image patches), ``gradcam`` (convolutional image models),
+        ``occlusion``, or ``auto``.
+        """
         body: Dict[str, Any] = {
             "model": model,
             "input": dict(input),
