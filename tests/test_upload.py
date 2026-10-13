@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import warnings
 
 import httpx
 import numpy as np
 import pytest
 
 from kaimei import Kaimei, StructureError, estimator_to_spec
+from kaimei.structure import MAX_REFERENCE_ROWS, cap_reference_rows, spec_is_executable
 
 
 def _handler(request: httpx.Request) -> httpx.Response:
@@ -27,10 +29,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
             },
         )
     if path == "/v1/models/mdl_up/structure" and request.method == "PUT":
-        return httpx.Response(
-            200,
-            json={"object": "model.structure", "source": "upload", "fidelity": "exact", "model_id": "mdl_up"},
-        )
+        raise AssertionError("upload() must not PUT structure after POST already included it")
     if path == "/v1/models/mdl_up/reference-data" and request.method == "PUT":
         body = json.loads(request.content)
         return httpx.Response(
@@ -62,6 +61,7 @@ def test_estimator_to_spec_reads_linear_weights():
     assert spec["task"] == "binary_classification"
     assert spec["layers"][1]["weight"] == [[0.25, -0.5]]
     assert spec["layers"][1]["bias"] == [0.1]
+    assert spec_is_executable(spec)
 
 
 def test_estimator_to_spec_reads_keras_dense():
@@ -106,3 +106,33 @@ def test_unknown_estimator_raises():
     with pytest.raises(StructureError) as exc:
         estimator_to_spec(Unknown(), feature_names=["a", "b"])
     assert exc.value.code == "unsupported_estimator"
+
+
+def test_cap_reference_rows_warns():
+    rows = [{"x": i} for i in range(MAX_REFERENCE_ROWS + 10)]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        capped, labels = cap_reference_rows(rows, list(range(len(rows))))
+    assert len(capped) == MAX_REFERENCE_ROWS
+    assert labels is not None and len(labels) == MAX_REFERENCE_ROWS
+    assert any("Reference data" in str(item.message) for item in caught)
+
+
+def test_summary_spec_is_not_executable():
+    assert not spec_is_executable({"family": "ensemble_summary", "importances": [0.5, 0.5]})
+    assert not spec_is_executable({"family": "network", "approximate": True})
+
+
+def test_sklearn_logistic_to_spec():
+    sklearn = pytest.importorskip("sklearn")
+    from sklearn.linear_model import LogisticRegression
+
+    del sklearn
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 2))
+    y = (X[:, 0] + 0.2 * X[:, 1] > 0).astype(int)
+    clf = LogisticRegression().fit(X, y)
+    spec = estimator_to_spec(clf, feature_names=["a", "b"])
+    assert spec["family"] == "network"
+    assert spec["layers"][1]["type"] == "dense"
+    assert spec_is_executable(spec)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional
 
+from .._objects import APIObject
 from ._base import Page, Resource, compact
 
 
@@ -42,7 +43,7 @@ class Explanations(Resource):
         body.update(extra)
         return self._post("/v1/explanations", compact(body))
 
-    def retrieve(self, explanation_id: str):
+    def retrieve(self, explanation_id: str) -> APIObject:
         return self._get(f"/v1/explanations/{explanation_id}")
 
     def list(
@@ -64,3 +65,7 @@ class Explanations(Resource):
                 "offset": offset,
             },
         )
+
+    def iterate(self, **params: Any) -> Iterator[Any]:
+        params.pop("offset", None)
+        return self._iter("/v1/explanations", params)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
+from .._objects import APIObject
 from ._base import Page, Resource, compact
 
 
@@ -31,7 +32,7 @@ class Predictions(Resource):
     def create_batch(self, *, model: str, items: Sequence[Mapping[str, Any]]):
         return self._post("/v1/predictions/batch", {"model": model, "items": [dict(i) for i in items]})
 
-    def retrieve(self, prediction_id: str):
+    def retrieve(self, prediction_id: str) -> APIObject:
         return self._get(f"/v1/predictions/{prediction_id}")
 
     def list(
@@ -46,3 +47,7 @@ class Predictions(Resource):
             "/v1/predictions",
             {"model": model, "source": source, "limit": limit, "offset": offset},
         )
+
+    def iterate(self, **params: Any) -> Iterator[Any]:
+        params.pop("offset", None)
+        return self._iter("/v1/predictions", params)

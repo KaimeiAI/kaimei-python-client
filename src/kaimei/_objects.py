@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, List, Mapping
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
 
 
 def wrap(value: Any) -> Any:
@@ -15,6 +15,8 @@ def wrap(value: Any) -> Any:
 
 class APIObject(Mapping[str, Any]):
     """A JSON object you can read as ``obj.top_features`` or ``obj["top_features"]``."""
+
+    _data: Dict[str, Any]
 
     def __init__(self, data: Dict[str, Any]) -> None:
         object.__setattr__(self, "_data", dict(data))
@@ -36,7 +38,7 @@ class APIObject(Mapping[str, Any]):
     def __contains__(self, key: object) -> bool:
         return key in self._data
 
-    def get(self, key: str, default: Any = None) -> Any:  # type: ignore[override]
+    def get(self, key: str, default: Any = None) -> Any:
         if key in self._data:
             return wrap(self._data[key])
         return default
@@ -52,6 +54,24 @@ class APIObject(Mapping[str, Any]):
 class Page(APIObject):
     """A paginated list: ``page.data``, ``page.total``, ``page.has_more``."""
 
+    def __init__(self, data: Dict[str, Any], *, _next: Optional[Callable[[], "Page"]] = None) -> None:
+        super().__init__(data)
+        object.__setattr__(self, "_next", _next)
+
     @property
-    def items(self) -> List[Any]:
-        return list(self.data)  # type: ignore[arg-type]
+    def items(self) -> List[Any]:  # type: ignore[override]
+        payload = self._data.get("data") or []
+        if not isinstance(payload, list):
+            return []
+        return [wrap(item) for item in payload]
+
+    def auto_paging_iter(self) -> Iterator[Any]:
+        """Yield every item on this page, then follow ``has_more`` until exhausted."""
+        page: Page = self
+        while True:
+            yield from page.items
+            more = bool(getattr(page, "has_more", False))
+            nxt = object.__getattribute__(page, "_next")
+            if not more or nxt is None:
+                return
+            page = nxt()

@@ -23,6 +23,7 @@ from .errors import (
     AuthenticationError,
     KaimeiError,
     NotFoundError,
+    PermissionDeniedError,
     PermissionError,
     RateLimitError,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "Kaimei",
     "KaimeiError",
     "AuthenticationError",
+    "PermissionDeniedError",
     "PermissionError",
     "NotFoundError",
     "RateLimitError",

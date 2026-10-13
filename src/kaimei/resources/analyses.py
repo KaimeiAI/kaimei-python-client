@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional
 
 from ..errors import APIStatusError
 from ._base import Page, Resource, compact
@@ -26,6 +26,10 @@ class Analyses(Resource):
             "/v1/analyses",
             {"model": model, "status": status, "limit": limit, "offset": offset},
         )
+
+    def iterate(self, **params: Any) -> Iterator[Any]:
+        params.pop("offset", None)
+        return self._iter("/v1/analyses", params)
 
     def wait(
         self,

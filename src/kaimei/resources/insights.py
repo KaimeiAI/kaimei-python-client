@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Iterator, Optional
 
+from .._objects import APIObject
 from ._base import Page, Resource
 
 
 class Insights(Resource):
-    def retrieve(self, insight_id: str):
+    def retrieve(self, insight_id: str) -> APIObject:
         return self._get(f"/v1/insights/{insight_id}")
 
     def list(
@@ -30,3 +31,7 @@ class Insights(Resource):
                 "offset": offset,
             },
         )
+
+    def iterate(self, **params: Any) -> Iterator[Any]:
+        params.pop("offset", None)
+        return self._iter("/v1/insights", params)

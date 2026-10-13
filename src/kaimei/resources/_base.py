@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Optional
 
 from .._objects import APIObject, Page, wrap
 
@@ -28,10 +28,25 @@ class Resource:
         return wrap(self._client._request("DELETE", path))
 
     def _page(self, path: str, params: Optional[Mapping[str, Any]] = None) -> Page:
+        params = dict(params or {})
         data = self._client._request("GET", path, params=params)
-        if isinstance(data, dict):
-            return Page(data)
-        return Page({"object": "list", "data": data, "total": len(data), "limit": len(data), "offset": 0, "has_more": False})
+        if not isinstance(data, dict):
+            rows = list(data)
+            return Page(
+                {"object": "list", "data": rows, "total": len(rows), "limit": len(rows), "offset": 0, "has_more": False}
+            )
+
+        def _next() -> Page:
+            nxt = dict(params)
+            items = data.get("data") or []
+            nxt["offset"] = int(nxt.get("offset") or 0) + len(items)
+            return self._page(path, nxt)
+
+        return Page(data, _next=_next)
+
+    def _iter(self, path: str, params: Optional[Mapping[str, Any]] = None) -> Iterator[Any]:
+        page = self._page(path, params)
+        yield from page.auto_paging_iter()
 
 
 def compact(body: Optional[Mapping[str, Any]]) -> Optional[dict]:

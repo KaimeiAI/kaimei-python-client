@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Mapping, Optional, Sequence
+import warnings
+from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence
 
+from .._objects import APIObject
 from ..structure import (
+    cap_reference_rows,
     detect_framework,
     estimator_to_spec,
     features_from_spec,
     labels_from_target,
     rows_from_inputs,
+    spec_is_executable,
+    warn_if_large_spec,
 )
 from ._base import Page, Resource, compact
 
@@ -49,7 +54,7 @@ class Models(Resource):
         body.update(extra)
         return self._post("/v1/models", compact(body))
 
-    def retrieve(self, model: str):
+    def retrieve(self, model: str) -> APIObject:
         return self._get(f"/v1/models/{model}")
 
     def list(
@@ -75,6 +80,11 @@ class Models(Resource):
                 "offset": offset,
             },
         )
+
+    def iterate(self, **params: Any) -> Iterator[Any]:
+        """Yield every model, following pagination automatically."""
+        params.pop("offset", None)
+        return self._iter("/v1/models", params)
 
     def update(self, model: str, **fields: Any):
         return self._patch(f"/v1/models/{model}", compact(fields))
@@ -159,16 +169,30 @@ class Models(Resource):
         Call this from a notebook that already holds the trained object. Kaimei
         stores the extracted JSON spec (not the original ``.h5`` / ``.pt`` file)
         so the dashboard can draw every layer and tensor.
+
+        Executable families (linear, MLP, tree, small forest) can be queried for
+        explanations and analyses. Summaries and approximate nets need
+        ``inference={"type": "remote", "url": "..."}`` or pre-computed attributions.
         """
         spec = estimator_to_spec(estimator, feature_names=feature_names, task=task, framework=framework)
+        warn_if_large_spec(spec)
         names = list(feature_names) if feature_names is not None else list(spec.get("feature_names") or [])
         feature_list = [dict(item) for item in features] if features is not None else features_from_spec(spec)
         resolved_task = task or spec.get("task")
         resolved_framework = framework or spec.get("framework") or detect_framework(estimator)
         resolved_outputs = dict(outputs) if outputs else spec.get("outputs")
+        resolved_inference = dict(inference) if inference else {"type": "none"}
         extra_meta = {"uploaded_from": "python-client"}
         if metadata:
             extra_meta.update(dict(metadata))
+        if resolved_inference.get("type", "none") == "none" and not spec_is_executable(spec):
+            warnings.warn(
+                "This estimator was stored as a sketch or feature-importance summary. "
+                "Kaimei can visualize it, but explain/predict/analyse need a remote "
+                "inference URL or pre-computed attributions.",
+                UserWarning,
+                stacklevel=2,
+            )
         created = self.create(
             name=name,
             task=resolved_task,
@@ -178,17 +202,17 @@ class Models(Resource):
             description=description,
             framework=resolved_framework,
             outputs=resolved_outputs,
-            inference=inference or {"type": "none"},
+            inference=resolved_inference,
             tags=tags,
             metadata=extra_meta,
             structure=spec,
             project_id=project_id,
         )
         model_ref = created.get("id") or created.get("slug") or name
-        self.upload_structure(str(model_ref), spec)
         if X is not None:
             rows, _names = rows_from_inputs(X, names or None)
             labels = labels_from_target(y) if y is not None else None
+            rows, labels = cap_reference_rows(rows, labels)
             self.upload_reference_data(str(model_ref), rows=rows, labels=labels)
         return created
 

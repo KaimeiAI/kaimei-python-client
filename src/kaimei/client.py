@@ -16,7 +16,7 @@ from .resources.organization import Organization
 from .resources.predictions import Predictions
 from .resources.projects import Projects
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 class Kaimei:
@@ -44,6 +44,7 @@ class Kaimei:
         *,
         base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = 3,
         default_headers: Optional[Mapping[str, str]] = None,
     ) -> None:
         key = api_key if api_key is not None else os.environ.get("KAIMEI_API_KEY")
@@ -52,6 +53,7 @@ class Kaimei:
             api_key=key,
             base_url=url,
             timeout=timeout,
+            max_retries=max_retries,
             user_agent=f"kaimei-python/{__version__}",
             extra_headers=default_headers,
         )
@@ -73,6 +75,12 @@ class Kaimei:
         """Switch the Authorization header (used after ``auth.login`` / ``auth.signup``)."""
         self._transport.api_key = token
         self._transport._client.headers["Authorization"] = f"Bearer {token}"
+
+    def health(self) -> Any:
+        """``GET /health`` — liveness of the API process."""
+        from ._objects import wrap
+
+        return wrap(self._request("GET", "/health"))
 
     def close(self) -> None:
         self._transport.close()

@@ -39,8 +39,11 @@ class AuthenticationError(KaimeiError):
     """The API key or session token was rejected."""
 
 
-class PermissionError(KaimeiError):  # noqa: A001 — matches the API error type
+class PermissionDeniedError(KaimeiError):
     """The caller is authenticated but not allowed to do this."""
+
+
+PermissionError = PermissionDeniedError
 
 
 class NotFoundError(KaimeiError):
@@ -61,9 +64,10 @@ class APIStatusError(KaimeiError):
 
 def error_from_response(status_code: int, body: Any) -> KaimeiError:
     payload = body if isinstance(body, dict) else {}
-    err = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    raw_err = payload.get("error")
+    err: Dict[str, Any] = raw_err if isinstance(raw_err, dict) else {}
     message = err.get("message") or payload.get("message") or f"Request failed with HTTP {status_code}."
-    kwargs = {
+    kwargs: Dict[str, Any] = {
         "type": err.get("type"),
         "code": err.get("code"),
         "param": err.get("param"),
@@ -73,7 +77,7 @@ def error_from_response(status_code: int, body: Any) -> KaimeiError:
     if status_code == 401 or err.get("type") == "authentication_error":
         return AuthenticationError(message, **kwargs)
     if status_code == 403 or err.get("type") == "permission_error":
-        return PermissionError(message, **kwargs)
+        return PermissionDeniedError(message, **kwargs)
     if status_code == 404 or err.get("type") == "not_found_error":
         return NotFoundError(message, **kwargs)
     if status_code == 429 or err.get("type") == "rate_limit_error":

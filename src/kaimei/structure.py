@@ -3,13 +3,23 @@
 The HTTP API never unpickles a checkpoint. A notebook that already holds the
 trained object calls :func:`estimator_to_spec` (or ``client.models.upload``)
 and sends layers, weights, and biases as JSON.
+
+This module is the user-facing copy of ``kaimei_api.engine.structure.extract``.
+Keep the conversion rules aligned with that file when you change either side.
 """
 
 from __future__ import annotations
 
+import json
+import warnings
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .errors import KaimeiError
+
+MAX_REFERENCE_ROWS = 5000
+WARN_STRUCTURE_BYTES = 2_000_000
+LARGE_STRUCTURE_BYTES = 16_000_000
+EXECUTABLE_FAMILIES = {"network", "tree", "ensemble"}
 
 try:
     import numpy as np
@@ -35,6 +45,58 @@ def _require_numpy() -> Any:
 
 _MLP_ACTIVATIONS = {"relu": "relu", "tanh": "tanh", "logistic": "sigmoid", "identity": None}
 _OUT_ACTIVATIONS = {"logistic": "sigmoid", "softmax": "softmax", "identity": None}
+
+
+def spec_is_executable(spec: Mapping[str, Any]) -> bool:
+    """True when the API can score the uploaded spec (explain / predict / analyse)."""
+    if spec.get("approximate"):
+        return False
+    return str(spec.get("family") or "") in EXECUTABLE_FAMILIES
+
+
+def spec_payload_bytes(spec: Mapping[str, Any]) -> int:
+    return len(json.dumps(spec, default=str).encode("utf-8"))
+
+
+def warn_if_large_spec(spec: Mapping[str, Any]) -> int:
+    size = spec_payload_bytes(spec)
+    if size >= LARGE_STRUCTURE_BYTES:
+        warnings.warn(
+            f"This structure payload is {size / 1_000_000:.1f} MB. Reverse proxies and "
+            "Postgres JSONB may reject it. Prefer a smaller model, an ensemble summary, "
+            "or a remote inference URL.",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif size >= WARN_STRUCTURE_BYTES:
+        warnings.warn(
+            f"This structure payload is {size / 1_000_000:.1f} MB. Large weight tensors "
+            "are stored inline as JSON and can be slow to upload.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return size
+
+
+def cap_reference_rows(
+    rows: Sequence[Mapping[str, Any]],
+    labels: Optional[Sequence[Any]] = None,
+    *,
+    limit: int = MAX_REFERENCE_ROWS,
+) -> Tuple[List[Dict[str, Any]], Optional[List[Any]]]:
+    capped = [dict(row) for row in rows]
+    resolved_labels = list(labels) if labels is not None else None
+    if len(capped) <= limit:
+        return capped, resolved_labels
+    warnings.warn(
+        f"Reference data has {len(capped)} rows; Kaimei keeps the first {limit}. "
+        "Pass a representative sample or raise KAIMEI_MAX_REFERENCE_ROWS on the API.",
+        UserWarning,
+        stacklevel=3,
+    )
+    if resolved_labels is not None:
+        resolved_labels = resolved_labels[:limit]
+    return capped[:limit], resolved_labels
 
 
 def estimator_to_spec(
@@ -449,7 +511,7 @@ def _torch_to_spec(
             )
             continue
         layers.append(layer)
-    spec = {
+    spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
         "framework": framework or "pytorch",
@@ -799,13 +861,13 @@ def _keras_layer(layer: Any, kind: str) -> Optional[Dict[str, Any]]:
         return {"id": node_id, "type": "flatten", "label": str(getattr(layer, "name", None) or "Flatten")}
     if kind in {"MaxPooling2D", "MaxPool2D"}:
         size = getattr(layer, "pool_size", 2)
-        kernel = int(size[0] if isinstance(size, (list, tuple)) else size)
-        strides = getattr(layer, "strides", kernel)
+        pool = int(size[0] if isinstance(size, (list, tuple)) else size)
+        strides = getattr(layer, "strides", pool)
         stride = int(strides[0] if isinstance(strides, (list, tuple)) else strides)
         return {
             "id": node_id,
             "type": "maxpool",
-            "kernel": kernel,
+            "kernel": pool,
             "stride": stride,
             "label": str(getattr(layer, "name", None) or "Max pool"),
         }
