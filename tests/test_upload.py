@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from kaimei import Kaimei, StructureError, estimator_to_spec
-from kaimei.structure import MAX_REFERENCE_ROWS, cap_reference_rows, spec_is_executable
+from kaimei.structure import MAX_REFERENCE_ROWS, cap_reference_rows, detect_framework, spec_is_executable
 
 
 def _handler(request: httpx.Request) -> httpx.Response:
@@ -106,6 +106,49 @@ def test_unknown_estimator_raises():
     with pytest.raises(StructureError) as exc:
         estimator_to_spec(Unknown(), feature_names=["a", "b"])
     assert exc.value.code == "unsupported_estimator"
+
+
+def test_wrapper_around_linear_is_extracted():
+    class Linear:
+        coef_ = np.array([[0.25, -0.5]])
+        intercept_ = np.array([0.1])
+        classes_ = np.array(["no", "yes"])
+        n_features_in_ = 2
+
+    class VendorModel:
+        def __init__(self, inner):
+            self.model_ = inner
+
+    spec = estimator_to_spec(VendorModel(Linear()), feature_names=["income", "score"])
+    assert spec["layers"][1]["weight"] == [[0.25, -0.5]]
+    assert spec_is_executable(spec)
+
+
+def test_nested_search_wrapper_is_extracted():
+    class Linear:
+        coef_ = np.array([[1.0, -1.0]])
+        intercept_ = np.array([0.0])
+        n_features_in_ = 2
+
+    class Tuned:
+        def __init__(self, inner):
+            self.best_estimator_ = inner
+
+    spec = estimator_to_spec(Tuned(Linear()), feature_names=["a", "b"])
+    assert spec["family"] == "network"
+
+
+def test_detect_framework_walks_core_base_classes():
+    class CoreBase:
+        pass
+
+    CoreBase.__module__ = "sklearn.base"
+
+    class VendorEstimator(CoreBase):
+        pass
+
+    VendorEstimator.__module__ = "vendor.ensemble"
+    assert detect_framework(VendorEstimator()) == "sklearn"
 
 
 def test_cap_reference_rows_warns():

@@ -100,6 +100,7 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](examples/upload_s
 | sklearn `Pipeline` + `StandardScaler` or `(0, 1)` `MinMaxScaler` | Scaler folded or inserted, then the estimator | Same as the final step |
 | Keras / TensorFlow `Dense`, `Conv2D`, pooling, flatten, dropout, LayerNorm | Layer weights | Yes, unless a layer is unrecognized (`approximate`) |
 | `torch.nn` `Linear`, common activations, Dropout, LayerNorm, Embedding | Forward-hook order | Yes, unless a layer is unrecognized (`approximate`) |
+| Wrapper around any of the above (`model_`, `estimator_`, `best_estimator_`, `module`, …) | Same as the inner estimator | Same as the inner estimator |
 | XGBoost / LightGBM / CatBoost (sklearn API) | `feature_importances_` summary | No — pass `inference` remote or attributions |
 | ONNX, Hugging Face, LLMs | Framework label only | No |
 

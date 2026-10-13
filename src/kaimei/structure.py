@@ -99,6 +99,50 @@ def cap_reference_rows(
     return capped[:limit], resolved_labels
 
 
+_EXACT_FAMILIES = {"network", "tree", "ensemble"}
+_WRAPPER_ATTRS = (
+    "best_estimator_",
+    "estimator_",
+    "base_estimator_",
+    "final_estimator_",
+    "regressor_",
+    "classifier_",
+    "calibrated_classifiers_",
+    "named_estimators_",
+    "model_",
+    "module_",
+    "network_",
+    "net_",
+    "learner_",
+    "booster_",
+    "_model",
+    "_estimator",
+    "model",
+    "module",
+    "network",
+    "net",
+    "estimator",
+    "base_estimator",
+    "regressor",
+    "classifier",
+)
+_SKIP_UNWRAP_ATTRS = {
+    "tree_",
+    "coef_",
+    "coefs_",
+    "intercept_",
+    "intercepts_",
+    "feature_importances_",
+    "feature_names_in_",
+    "classes_",
+    "n_features_in_",
+    "steps",
+    "layers",
+}
+_MAX_UNWRAP = 24
+_MAX_UNWRAP_DEPTH = 3
+
+
 def estimator_to_spec(
     estimator: Any,
     *,
@@ -106,40 +150,202 @@ def estimator_to_spec(
     task: Optional[str] = None,
     framework: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return a ``kaimei.structure.v1`` document for ``compile_spec`` / ``PUT /structure``."""
+    """Return a ``kaimei.structure.v1`` document for ``compile_spec`` / ``PUT /structure``.
+
+    Reads a known fitted shape (linear / MLP / tree / forest / Keras / Torch). If this
+    object is a wrapper around one of those, the inner estimator is used — no
+    vendor-specific package names required.
+    """
     _require_numpy()
+    candidates = list(_iter_estimators(estimator))
     if feature_names is not None:
         names = [str(name) for name in feature_names]
     else:
-        try:
-            names = _infer_names(estimator)
-        except StructureError:
-            if _is_keras_model(estimator) or _is_torch_module(estimator):
+        names = None
+        for candidate in candidates:
+            try:
+                names = _infer_names(candidate)
+                break
+            except StructureError:
+                continue
+        if names is None:
+            if any(_is_keras_model(item) or _is_torch_module(item) for item in candidates):
                 names = []
             else:
-                raise
+                raise StructureError(
+                    "Pass feature_names; this estimator does not say how many inputs it has.",
+                    code="invalid_structure",
+                    param="feature_names",
+                )
+    best: Optional[Dict[str, Any]] = None
+    best_rank = -1
+    best_source: Any = estimator
+    for candidate in candidates:
+        spec = _direct_spec(candidate, names, task, framework)
+        if spec is None:
+            continue
+        rank = 2 if spec.get("family") in _EXACT_FAMILIES else 1
+        if rank > best_rank:
+            best = spec
+            best_rank = rank
+            best_source = candidate
+        if best_rank >= 2:
+            break
+    if best is None:
+        raise StructureError(
+            "Cannot read this estimator. Supported shapes: linear coefficients, MLP coefs_, "
+            "a decision tree, a forest, a StandardScaler pipeline around those, a Keras / "
+            "TensorFlow model, a torch.nn module, or an estimator with feature_importances_. "
+            "Wrappers around any of those are also accepted.",
+            code="unsupported_estimator",
+        )
+    if framework is None:
+        extracted = detect_framework(best_source)
+        if extracted != "custom":
+            best["framework"] = extracted
+        else:
+            outer = detect_framework(estimator)
+            if outer != "custom":
+                best["framework"] = outer
+    return best
+
+
+def _direct_spec(
+    estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Convert ``estimator`` if it already has a known fitted shape. No unwrapping."""
     if _is_pipeline(estimator):
         return _pipeline_to_spec(estimator, names, task, framework)
     if hasattr(estimator, "coefs_") and hasattr(estimator, "intercepts_"):
         return _mlp_to_spec(estimator, names, task, framework)
-    if hasattr(estimator, "estimators_") and hasattr(estimator, "feature_importances_"):
-        return _forest_to_spec(estimator, names, task, framework)
+    if hasattr(estimator, "estimators_"):
+        try:
+            return _forest_to_spec(estimator, names, task, framework)
+        except StructureError as exc:
+            if exc.code != "unsupported_estimator":
+                raise
     if hasattr(estimator, "tree_"):
         return _tree_to_spec(estimator, names, task, framework)
     if hasattr(estimator, "coef_") and hasattr(estimator, "intercept_"):
         return _linear_to_spec(estimator, names, task, framework)
     if _is_keras_model(estimator):
-        return _keras_to_spec(estimator, names, task, framework)
+        try:
+            return _keras_to_spec(estimator, names, task, framework)
+        except StructureError as exc:
+            if exc.code != "unsupported_estimator":
+                raise
+            return None
     if _is_torch_module(estimator):
-        return _torch_to_spec(estimator, names, task, framework)
+        try:
+            return _torch_to_spec(estimator, names, task, framework)
+        except StructureError as exc:
+            if exc.code != "unsupported_estimator":
+                raise
+            return None
     if hasattr(estimator, "feature_importances_"):
         return _importance_to_spec(estimator, names, task, framework)
-    raise StructureError(
-        "Cannot read this estimator. Supported shapes: linear coefficients, MLP coefs_, "
-        "a decision tree, a forest, a StandardScaler pipeline around those, a Keras / "
-        "TensorFlow model, a torch.nn module, or an estimator with feature_importances_.",
-        code="unsupported_estimator",
+    return None
+
+
+def _iter_estimators(root: Any) -> List[Any]:
+    """Breadth-first walk of conventional wrapper attributes and fitted children."""
+    found: List[Any] = []
+    queue: List[tuple] = [(root, 0)]
+    seen = {id(root)}
+    while queue and len(found) < _MAX_UNWRAP:
+        current, depth = queue.pop(0)
+        found.append(current)
+        if depth >= _MAX_UNWRAP_DEPTH:
+            continue
+        for child in _child_estimators(current):
+            marker = id(child)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            queue.append((child, depth + 1))
+    return found
+
+
+def _child_estimators(estimator: Any) -> List[Any]:
+    children: List[Any] = []
+    seen: set = set()
+
+    def _add(value: Any) -> None:
+        for item in _expand_estimator(value):
+            marker = id(item)
+            if marker in seen or item is estimator:
+                continue
+            seen.add(marker)
+            children.append(item)
+
+    for name in _WRAPPER_ATTRS:
+        if name in _SKIP_UNWRAP_ATTRS:
+            continue
+        _add(_safe_attr(estimator, name))
+    values = getattr(estimator, "__dict__", None)
+    if isinstance(values, dict):
+        for name, value in values.items():
+            if name in _SKIP_UNWRAP_ATTRS or name in _WRAPPER_ATTRS:
+                continue
+            if name.startswith("__"):
+                continue
+            if name.endswith("_") or name in {"model", "module", "network", "net", "estimator"}:
+                _add(value)
+    return children
+
+
+def _expand_estimator(value: Any) -> List[Any]:
+    if value is None or value is True or value is False:
+        return []
+    if isinstance(value, dict):
+        return [item for item in value.values() if _is_estimator_candidate(item)]
+    if isinstance(value, (list, tuple)):
+        out: List[Any] = []
+        for item in value:
+            if isinstance(item, (list, tuple)) and item:
+                item = item[-1] if _is_estimator_candidate(item[-1]) else item[0]
+            if _is_estimator_candidate(item):
+                out.append(item)
+        return out
+    return [value] if _is_estimator_candidate(value) else []
+
+
+def _is_estimator_candidate(obj: Any) -> bool:
+    if obj is None or isinstance(obj, (str, bytes, bytearray, int, float, complex, bool, type)):
+        return False
+    module = str(getattr(type(obj), "__module__", "") or "")
+    if module in {"builtins", "numpy", "pandas"} or module.startswith(("numpy.", "pandas.")):
+        return False
+    if np is not None and isinstance(obj, np.ndarray):
+        return False
+    return (
+        _has_known_shape(obj)
+        or any(_safe_attr(obj, name) is not None and name not in _SKIP_UNWRAP_ATTRS for name in _WRAPPER_ATTRS)
+        or hasattr(obj, "predict")
+        or _is_keras_model(obj)
+        or _is_torch_module(obj)
+        or _is_pipeline(obj)
     )
+
+
+def _has_known_shape(obj: Any) -> bool:
+    return (
+        (hasattr(obj, "coefs_") and hasattr(obj, "intercepts_"))
+        or hasattr(obj, "estimators_")
+        or hasattr(obj, "tree_")
+        or (hasattr(obj, "coef_") and hasattr(obj, "intercept_"))
+        or hasattr(obj, "feature_importances_")
+        or _is_keras_model(obj)
+        or _is_torch_module(obj)
+        or _is_pipeline(obj)
+    )
+
+
+def _safe_attr(obj: Any, name: str) -> Any:
+    try:
+        return getattr(obj, name)
+    except Exception:
+        return None
 
 
 def _infer_names(estimator: Any) -> List[str]:
@@ -162,7 +368,8 @@ def _infer_names(estimator: Any) -> List[str]:
 
 
 def _is_pipeline(estimator: Any) -> bool:
-    return hasattr(estimator, "steps") and isinstance(estimator.steps, (list, tuple))
+    steps = getattr(estimator, "steps", None)
+    return isinstance(steps, (list, tuple)) and bool(steps)
 
 
 def _linear_to_spec(
@@ -374,12 +581,11 @@ def _pipeline_to_spec(
         center, scale = found
     assert center is not None and scale is not None
     final_estimator = final[1]
-    if hasattr(final_estimator, "tree_") and not hasattr(final_estimator, "coefs_"):
-        spec = _tree_to_spec(final_estimator, names, task, framework)
+    spec = estimator_to_spec(final_estimator, feature_names=names, task=task, framework=framework)
+    if spec.get("family") == "tree":
         _fold_scaler(spec["nodes"], center, scale)
         spec["summary"] = "Standardizer folded into the split thresholds, so the tree reads raw features."
         return spec
-    spec = estimator_to_spec(final_estimator, feature_names=names, task=task, framework=framework)
     if spec.get("family") not in {None, "network"}:
         raise StructureError(
             "A scaler can precede a linear model, an MLP, or a single tree.",
@@ -577,7 +783,19 @@ def _safe_id(name: str) -> str:
 
 
 def detect_framework(estimator: Any) -> str:
-    module = str(getattr(type(estimator), "__module__", "") or "")
+    """Label from this class or a core-framework base class, not from vendor package names."""
+    for cls in getattr(type(estimator), "__mro__", (type(estimator),)):
+        found = _framework_from_module(str(getattr(cls, "__module__", "") or ""))
+        if found:
+            return found
+    if _is_keras_model(estimator):
+        return "keras"
+    if _is_torch_module(estimator):
+        return "pytorch"
+    return "custom"
+
+
+def _framework_from_module(module: str) -> Optional[str]:
     if module.startswith("sklearn") or ".sklearn." in module:
         return "sklearn"
     if module.startswith("torch") or ".torch." in module:
@@ -588,15 +806,11 @@ def detect_framework(estimator: Any) -> str:
         return "lightgbm"
     if module.startswith("catboost") or "catboost" in module:
         return "catboost"
-    if "tensorflow" in module:
-        return "tensorflow"
     if module.startswith("keras") or ".keras" in module:
         return "keras"
-    if _is_keras_model(estimator):
-        return "keras"
-    if _is_torch_module(estimator):
-        return "pytorch"
-    return "custom"
+    if "tensorflow" in module:
+        return "tensorflow"
+    return None
 
 
 def features_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
