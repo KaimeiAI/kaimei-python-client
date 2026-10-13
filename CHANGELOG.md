@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — 2026-10-13
+
+### Fixed
+
+- mypy type-checks as Python 3.10 and resolves feature names to `list[str]` before
+  reading a wrapped estimator.
+
 ## 0.2.1 — 2026-10-13
 
 ### Added

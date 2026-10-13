@@ -158,25 +158,27 @@ def estimator_to_spec(
     """
     _require_numpy()
     candidates = list(_iter_estimators(estimator))
+    names: List[str]
     if feature_names is not None:
         names = [str(name) for name in feature_names]
     else:
-        names = None
+        inferred: Optional[List[str]] = None
         for candidate in candidates:
             try:
-                names = _infer_names(candidate)
+                inferred = _infer_names(candidate)
                 break
             except StructureError:
                 continue
-        if names is None:
+        if inferred is None:
             if any(_is_keras_model(item) or _is_torch_module(item) for item in candidates):
-                names = []
+                inferred = []
             else:
                 raise StructureError(
                     "Pass feature_names; this estimator does not say how many inputs it has.",
                     code="invalid_structure",
                     param="feature_names",
                 )
+        names = inferred
     best: Optional[Dict[str, Any]] = None
     best_rank = -1
     best_source: Any = estimator
