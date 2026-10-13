@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from kaimei import Kaimei, StructureError, estimator_to_spec
-from kaimei.structure import MAX_REFERENCE_ROWS, cap_reference_rows, detect_framework, spec_is_executable
+from kaimei.structure import (
+    MAX_REFERENCE_ROWS,
+    cap_reference_rows,
+    detect_framework,
+    spec_is_executable,
+)
 
 
 def _handler(request: httpx.Request) -> httpx.Response:

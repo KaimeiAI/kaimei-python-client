@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-10-13
+
+### Added
+
+- `estimator_to_spec` unwraps wrappers around a fitted sklearn / Keras / Torch estimator
+  (`model_`, `estimator_`, `best_estimator_`, `module`, and the same family) without
+  special-casing vendor packages. Framework labels follow the core-library MRO.
+
 ## 0.2.0 — 2026-10-12
 
 First release that can upload a fitted estimator from a notebook.
