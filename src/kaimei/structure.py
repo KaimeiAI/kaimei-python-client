@@ -182,7 +182,7 @@ def finalize_spec(
                 if isinstance(value, Mapping):
                     if weights == "summary" and "$tensor" in value:
                         known = (tensors or {}).get(str(value["$tensor"]))
-                        shape = list(value.get("shape") or getattr(known, "shape", ()))
+                        shape = list(value.get("shape") or getattr(known, "shape", None) or ())
                         ghost: Dict[str, Any] = {"$shape": [int(dim) for dim in shape] or [1], "dtype": "f32"}
                         if known is not None:
                             ghost["stats"] = tensor_stats(known)

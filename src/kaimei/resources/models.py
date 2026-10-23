@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 from .._objects import APIObject
 from ..structure import (
@@ -204,7 +204,7 @@ class Models(Resource):
         resolved_framework = framework or spec.get("framework") or detect_framework(estimator)
         resolved_outputs = dict(outputs) if outputs else spec.get("outputs")
         resolved_inference = dict(inference) if inference else {"type": "none"}
-        extra_meta = {"uploaded_from": "python-client"}
+        extra_meta: Dict[str, Any] = {"uploaded_from": "python-client"}
         if extraction.externalized:
             extra_meta["binary_tensors"] = len(extraction.tensors)
         if metadata:
