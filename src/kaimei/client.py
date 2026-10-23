@@ -16,7 +16,7 @@ from .resources.organization import Organization
 from .resources.predictions import Predictions
 from .resources.projects import Projects
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 
 class Kaimei:
@@ -98,5 +98,7 @@ class Kaimei:
         *,
         params: Optional[Mapping[str, Any]] = None,
         json_body: Any = None,
+        content: Optional[bytes] = None,
+        raw: bool = False,
     ) -> Any:
-        return self._transport.request(method, path, params=params, json_body=json_body)
+        return self._transport.request(method, path, params=params, json_body=json_body, content=content, raw=raw)

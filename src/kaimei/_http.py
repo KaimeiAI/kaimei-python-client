@@ -51,11 +51,21 @@ class Transport:
         *,
         params: Optional[Mapping[str, Any]] = None,
         json_body: Any = None,
+        content: Optional[bytes] = None,
+        raw: bool = False,
         expected: Optional[int] = None,
     ) -> Any:
+        """Send one request. ``content`` uploads raw bytes; ``raw`` returns the response bytes."""
         query = _clean_params(params)
         url = path if path.startswith("http") else path
         verb = method.upper()
+        headers: Optional[Dict[str, str]] = None
+        if json_body is not None:
+            headers = {"Content-Type": "application/json"}
+        elif content is not None:
+            headers = {"Content-Type": "application/octet-stream"}
+        if raw:
+            headers = {**(headers or {}), "Accept": "application/octet-stream"}
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -64,7 +74,8 @@ class Transport:
                     url,
                     params=query or None,
                     json=json_body,
-                    headers={"Content-Type": "application/json"} if json_body is not None else None,
+                    content=content,
+                    headers=headers,
                 )
             except httpx.HTTPError as exc:
                 last_error = exc
@@ -73,6 +84,8 @@ class Transport:
                 time.sleep(_backoff(attempt))
                 continue
 
+            if raw and 200 <= response.status_code < 300:
+                return response.content
             if expected is not None and response.status_code == expected:
                 return _empty_or_decode(response)
             if 200 <= response.status_code < 300:

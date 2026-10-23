@@ -1,8 +1,11 @@
 """Read a fitted estimator in the user's process, then upload the JSON spec.
 
 The HTTP API never unpickles a checkpoint. A notebook that already holds the
-trained object calls :func:`estimator_to_spec` (or ``client.models.upload``)
-and sends layers, weights, and biases as JSON.
+trained object calls :func:`extract_structure` (or ``client.models.upload``)
+and sends layers, weights, and biases: small tensors inline as JSON, large ones
+as compressed binary uploads referenced from the spec as ``{"$tensor": key}``.
+``weights="summary"`` sends shapes and statistics only, so the weights never
+leave the user's environment and the dashboard still draws the architecture.
 
 This module is the user-facing copy of ``kaimei_api.engine.structure.extract``.
 Keep the conversion rules aligned with that file when you change either side.
@@ -12,6 +15,8 @@ from __future__ import annotations
 
 import json
 import warnings
+import zlib
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .errors import KaimeiError
@@ -19,6 +24,10 @@ from .errors import KaimeiError
 MAX_REFERENCE_ROWS = 5000
 WARN_STRUCTURE_BYTES = 2_000_000
 LARGE_STRUCTURE_BYTES = 16_000_000
+#: Tensors with more values than this leave the JSON spec and upload as binary blobs.
+EXTERNALIZE_ABOVE = 65_536
+#: Spec keys that hold learned or fitted tensors.
+TENSOR_KEYS = ("weight", "bias", "gamma", "beta", "center", "scale")
 EXECUTABLE_FAMILIES = {"network", "tree", "ensemble"}
 
 try:
@@ -62,20 +71,145 @@ def warn_if_large_spec(spec: Mapping[str, Any]) -> int:
     size = spec_payload_bytes(spec)
     if size >= LARGE_STRUCTURE_BYTES:
         warnings.warn(
-            f"This structure payload is {size / 1_000_000:.1f} MB. Reverse proxies and "
-            "Postgres JSONB may reject it. Prefer a smaller model, an ensemble summary, "
-            "or a remote inference URL.",
+            f"This structure spec is {size / 1_000_000:.1f} MB of JSON. Reverse proxies may reject it. "
+            "Lower externalize_above so more tensors upload as binary, or use weights='summary'.",
             UserWarning,
             stacklevel=3,
         )
     elif size >= WARN_STRUCTURE_BYTES:
         warnings.warn(
-            f"This structure payload is {size / 1_000_000:.1f} MB. Large weight tensors "
-            "are stored inline as JSON and can be slow to upload.",
+            f"This structure spec is {size / 1_000_000:.1f} MB of JSON. Tensors above externalize_above "
+            "values upload as compressed binary instead; lower it to shrink the spec.",
             UserWarning,
             stacklevel=3,
         )
     return size
+
+
+def tensor_stats(array: Any) -> Dict[str, Any]:
+    """Summary statistics in the API's schema, for structure-only (``$shape``) uploads."""
+    flat = np.asarray(array, dtype=float).ravel()
+    if flat.size == 0:
+        return {
+            "min": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+            "l2": 0.0,
+            "abs_mean": 0.0,
+            "sparsity": 0.0,
+            "numel": 0,
+            "histogram": {"counts": [], "edges": []},
+        }
+    counts, edges = np.histogram(flat, bins=min(12, max(int(flat.size), 1)))
+    return {
+        "min": float(flat.min()),
+        "max": float(flat.max()),
+        "mean": float(flat.mean()),
+        "std": float(flat.std()),
+        "l2": float(np.linalg.norm(flat)),
+        "abs_mean": float(np.mean(np.abs(flat))),
+        "sparsity": float(np.mean(np.abs(flat) < 1e-8)),
+        "numel": int(flat.size),
+        "histogram": {"counts": [int(count) for count in counts], "edges": [float(edge) for edge in edges]},
+    }
+
+
+def encode_tensor(array: Any, dtype: str = "f32") -> bytes:
+    """Little-endian, zlib-compressed bytes the tensor endpoint accepts."""
+    kinds = {"f16": "<f2", "f32": "<f4", "f64": "<f8"}
+    if dtype not in kinds:
+        raise StructureError(f"Unsupported tensor dtype '{dtype}'. Use f16, f32 or f64.", code="invalid_tensor")
+    return zlib.compress(np.ascontiguousarray(np.asarray(array), dtype=kinds[dtype]).tobytes(), 6)
+
+
+@dataclass
+class Extraction:
+    """A JSON-ready spec plus the tensors that were lifted out of it for binary upload."""
+
+    spec: Dict[str, Any]
+    tensors: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def externalized(self) -> bool:
+        return bool(self.tensors)
+
+    @property
+    def tensor_bytes(self) -> int:
+        return int(sum(int(getattr(array, "nbytes", 0)) for array in self.tensors.values()))
+
+    def summary_spec(self) -> Dict[str, Any]:
+        """The same architecture with every tensor as a ghost (shape and statistics, no values).
+
+        This is what a large model is registered with before its tensors exist on the API.
+        """
+        return finalize_spec(self.spec, weights="summary", externalize_above=None, tensors=self.tensors).spec
+
+
+def finalize_spec(
+    spec: Mapping[str, Any],
+    *,
+    weights: str = "full",
+    externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
+    tensors: Optional[Mapping[str, Any]] = None,
+) -> Extraction:
+    """Turn the arrays inside a raw spec into JSON lists, binary references, or ghosts.
+
+    ``weights="summary"`` replaces every learned tensor with ``{"$shape", "stats"}`` so no
+    values are sent; existing ``$tensor`` references are summarised from ``tensors`` when
+    given. Otherwise tensors with more than ``externalize_above`` values become
+    ``{"$tensor": key}`` references and are returned in :attr:`Extraction.tensors`;
+    ``None`` keeps everything inline.
+    """
+    if weights not in {"full", "summary"}:
+        raise StructureError("weights must be 'full' or 'summary'.", code="invalid_structure", param="weights")
+    numpy = _require_numpy()
+    out = dict(spec)
+    lifted: Dict[str, Any] = {}
+    layers = spec.get("layers")
+    if isinstance(layers, list):
+        finalized = []
+        for raw in layers:
+            if not isinstance(raw, Mapping):
+                finalized.append(raw)
+                continue
+            layer = dict(raw)
+            layer_id = str(layer.get("id") or layer.get("type") or "layer")
+            for key in TENSOR_KEYS:
+                value = layer.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, Mapping):
+                    if weights == "summary" and "$tensor" in value:
+                        known = (tensors or {}).get(str(value["$tensor"]))
+                        shape = list(value.get("shape") or getattr(known, "shape", ()))
+                        ghost: Dict[str, Any] = {"$shape": [int(dim) for dim in shape] or [1], "dtype": "f32"}
+                        if known is not None:
+                            ghost["stats"] = tensor_stats(known)
+                        layer[key] = ghost
+                    continue
+                array = numpy.asarray(value, dtype=float)
+                if weights == "summary" and key in {"weight", "bias", "gamma", "beta"}:
+                    layer[key] = {
+                        "$shape": [int(dim) for dim in array.shape] or [1],
+                        "dtype": "f32",
+                        "stats": tensor_stats(array),
+                    }
+                elif externalize_above is not None and array.size > externalize_above:
+                    tensor_key = f"{layer_id}.{key}"
+                    lifted[tensor_key] = numpy.ascontiguousarray(array, dtype=numpy.float32)
+                    layer[key] = {"$tensor": tensor_key, "shape": [int(dim) for dim in array.shape], "dtype": "f32"}
+                else:
+                    layer[key] = array.tolist() if array.ndim else float(array)
+            finalized.append(layer)
+        out["layers"] = finalized
+    if hasattr(out.get("importances"), "tolist"):
+        out["importances"] = out["importances"].tolist()
+    if weights == "summary":
+        out["weights"] = "summary"
+    else:
+        out.pop("weights", None)
+    return Extraction(spec=out, tensors=lifted)
 
 
 def cap_reference_rows(
@@ -150,12 +284,43 @@ def estimator_to_spec(
     task: Optional[str] = None,
     framework: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return a ``kaimei.structure.v1`` document for ``compile_spec`` / ``PUT /structure``.
+    """Return a ``kaimei.structure.v1`` document with every tensor inline as JSON lists.
 
     Reads a known fitted shape (linear / MLP / tree / forest / Keras / Torch). If this
     object is a wrapper around one of those, the inner estimator is used — no
-    vendor-specific package names required.
+    vendor-specific package names required. For large models prefer
+    :func:`extract_structure`, which lifts big tensors out for binary upload.
     """
+    return extract_structure(
+        estimator, feature_names=feature_names, task=task, framework=framework, externalize_above=None
+    ).spec
+
+
+def extract_structure(
+    estimator: Any,
+    *,
+    feature_names: Optional[Sequence[str]] = None,
+    task: Optional[str] = None,
+    framework: Optional[str] = None,
+    weights: str = "full",
+    externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
+) -> Extraction:
+    """Read a fitted estimator into a spec plus the tensors to upload as binary.
+
+    ``weights="summary"`` keeps the weights private: the spec carries shapes and statistics
+    only, and the model is drawable but not executable on Kaimei.
+    """
+    raw = _extract_raw(estimator, feature_names, task, framework)
+    return finalize_spec(raw, weights=weights, externalize_above=externalize_above)
+
+
+def _extract_raw(
+    estimator: Any,
+    feature_names: Optional[Sequence[str]],
+    task: Optional[str],
+    framework: Optional[str],
+) -> Dict[str, Any]:
+    """The spec with tensors still as numpy arrays (see :func:`finalize_spec`)."""
     _require_numpy()
     candidates = list(_iter_estimators(estimator))
     names: List[str]
@@ -404,8 +569,8 @@ def _linear_to_spec(
                 "type": "dense",
                 "units": int(weight.shape[0]),
                 "activation": activation,
-                "weight": weight.tolist(),
-                "bias": bias.tolist(),
+                "weight": weight,
+                "bias": bias,
                 "label": "Linear",
                 "output_labels": labels,
             },
@@ -443,8 +608,8 @@ def _mlp_to_spec(estimator: Any, names: List[str], task: Optional[str], framewor
             "id": f"dense_{index + 1}",
             "type": "dense",
             "units": int(weight.shape[0]),
-            "weight": weight.tolist(),
-            "bias": bias.tolist(),
+            "weight": weight,
+            "bias": bias,
             "label": "Output" if last else f"Hidden {index + 1}",
         }
         if activation:
@@ -568,7 +733,7 @@ def _pipeline_to_spec(
 ) -> Dict[str, Any]:
     steps = list(estimator.steps)
     if len(steps) < 2:
-        return estimator_to_spec(steps[-1][1], feature_names=names, task=task, framework=framework)
+        return _extract_raw(steps[-1][1], names, task, framework)
     *preprocessors, final = steps
     center = None
     scale = None
@@ -583,7 +748,7 @@ def _pipeline_to_spec(
         center, scale = found
     assert center is not None and scale is not None
     final_estimator = final[1]
-    spec = estimator_to_spec(final_estimator, feature_names=names, task=task, framework=framework)
+    spec = _extract_raw(final_estimator, names, task, framework)
     if spec.get("family") == "tree":
         _fold_scaler(spec["nodes"], center, scale)
         spec["summary"] = "Standardizer folded into the split thresholds, so the tree reads raw features."
@@ -597,8 +762,8 @@ def _pipeline_to_spec(
     scaler_layer = {
         "id": "standardize",
         "type": "standardize",
-        "center": np.asarray(center, dtype=float).tolist(),
-        "scale": np.asarray(scale, dtype=float).tolist(),
+        "center": np.asarray(center, dtype=float),
+        "scale": np.asarray(scale, dtype=float),
         "label": "Standardize",
     }
     # Insert after the input layer.
@@ -712,6 +877,7 @@ def _torch_to_spec(
             layers.append(
                 {
                     "id": _safe_id(name),
+                    "path": name,
                     "type": "dropout",
                     "label": type(module).__name__,
                     "rate": 0,
@@ -726,7 +892,7 @@ def _torch_to_spec(
         "architecture": "mlp" if not unsupported else "network",
         "task": resolved,
         "feature_names": names,
-        "summary": "PyTorch module read in forward-hook order."
+        "summary": "PyTorch module read in forward-hook order. Module names group the layers into blocks."
         if not unsupported
         else "PyTorch module read in forward-hook order. Unrecognised layers are passed through.",
         "layers": layers,
@@ -737,6 +903,7 @@ def _torch_to_spec(
 
 
 def _torch_layer(name: str, module: Any, torch: Any) -> Optional[Dict[str, Any]]:
+    """One leaf module as a spec layer. ``path`` is the module name, so the API groups layers into blocks."""
     cls = type(module).__name__
     node_id = _safe_id(name)
     if cls == "Linear":
@@ -744,10 +911,11 @@ def _torch_layer(name: str, module: Any, torch: Any) -> Optional[Dict[str, Any]]
         bias = module.bias.detach().cpu().numpy() if module.bias is not None else np.zeros(weight.shape[0])
         return {
             "id": node_id,
+            "path": name,
             "type": "dense",
             "units": int(weight.shape[0]),
-            "weight": weight.tolist(),
-            "bias": np.asarray(bias).ravel().tolist(),
+            "weight": weight,
+            "bias": np.asarray(bias).ravel(),
             "label": name,
         }
     activations = {
@@ -759,20 +927,21 @@ def _torch_layer(name: str, module: Any, torch: Any) -> Optional[Dict[str, Any]]
         "Softmax": "softmax",
     }
     if cls in activations:
-        return {"id": node_id, "type": "activation", "activation": activations[cls], "label": name}
+        return {"id": node_id, "path": name, "type": "activation", "activation": activations[cls], "label": name}
     if cls == "Dropout":
-        return {"id": node_id, "type": "dropout", "rate": float(getattr(module, "p", 0.0)), "label": name}
+        return {"id": node_id, "path": name, "type": "dropout", "rate": float(getattr(module, "p", 0.0)), "label": name}
     if cls == "LayerNorm":
-        layer: Dict[str, Any] = {"id": node_id, "type": "layernorm", "label": name, "eps": float(module.eps)}
+        layer: Dict[str, Any] = {"id": node_id, "path": name, "type": "layernorm", "label": name, "eps": float(module.eps)}
         if module.elementwise_affine:
-            layer["gamma"] = module.weight.detach().cpu().numpy().tolist()
-            layer["beta"] = module.bias.detach().cpu().numpy().tolist()
+            layer["gamma"] = module.weight.detach().cpu().numpy()
+            layer["beta"] = module.bias.detach().cpu().numpy()
         return layer
     if cls == "Embedding":
         return {
             "id": node_id,
+            "path": name,
             "type": "embedding",
-            "weight": module.weight.detach().cpu().numpy().tolist(),
+            "weight": module.weight.detach().cpu().numpy(),
             "label": name,
         }
     del torch
@@ -1034,10 +1203,11 @@ def _keras_layer(layer: Any, kind: str) -> Optional[Dict[str, Any]]:
         bias = np.asarray(weights[1], dtype=float).ravel() if len(weights) > 1 else np.zeros(weight.shape[0])
         payload: Dict[str, Any] = {
             "id": node_id,
+            "path": str(getattr(layer, "name", None) or node_id),
             "type": "dense",
             "units": int(weight.shape[0]),
-            "weight": weight.tolist(),
-            "bias": bias.tolist(),
+            "weight": weight,
+            "bias": bias,
             "label": str(getattr(layer, "name", None) or "Dense"),
         }
         activation = _keras_activation(layer)
@@ -1062,9 +1232,10 @@ def _keras_layer(layer: Any, kind: str) -> Optional[Dict[str, Any]]:
         stride = int(strides[0] if isinstance(strides, (list, tuple)) else strides)
         payload = {
             "id": node_id,
+            "path": str(getattr(layer, "name", None) or node_id),
             "type": "conv2d",
-            "weight": weight.tolist(),
-            "bias": bias.tolist(),
+            "weight": weight,
+            "bias": bias,
             "padding": int(weight.shape[2] // 2) if padding == "same" else 0,
             "stride": stride,
             "label": str(getattr(layer, "name", None) or "Conv"),
@@ -1103,13 +1274,14 @@ def _keras_layer(layer: Any, kind: str) -> Optional[Dict[str, Any]]:
         weights = list(layer.get_weights()) if hasattr(layer, "get_weights") else []
         payload = {
             "id": node_id,
+            "path": str(getattr(layer, "name", None) or node_id),
             "type": "layernorm",
             "label": str(getattr(layer, "name", None) or "LayerNorm"),
             "eps": float(getattr(layer, "epsilon", 1e-5)),
         }
         if len(weights) >= 2:
-            payload["gamma"] = np.asarray(weights[0], dtype=float).tolist()
-            payload["beta"] = np.asarray(weights[1], dtype=float).tolist()
+            payload["gamma"] = np.asarray(weights[0], dtype=float)
+            payload["beta"] = np.asarray(weights[1], dtype=float)
         return payload
     return None
 

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 from .._objects import APIObject
 from ..structure import (
+    EXTERNALIZE_ABOVE,
+    Extraction,
     cap_reference_rows,
     detect_framework,
-    estimator_to_spec,
+    encode_tensor,
+    extract_structure,
     features_from_spec,
     labels_from_target,
     rows_from_inputs,
@@ -15,6 +18,9 @@ from ..structure import (
     warn_if_large_spec,
 )
 from ._base import Page, Resource, compact
+
+#: Called as ``progress(stage, done, total)`` while a large model uploads.
+Progress = Callable[[str, int, int], None]
 
 
 class Models(Resource):
@@ -163,18 +169,34 @@ class Models(Resource):
         project_id: Optional[str] = None,
         X: Any = None,
         y: Any = None,
+        weights: str = "full",
+        externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
+        progress: Optional[Progress] = None,
     ):
         """Register a fitted estimator and upload its layers and learned weights.
 
         Call this from a notebook that already holds the trained object. Kaimei
-        stores the extracted JSON spec (not the original ``.h5`` / ``.pt`` file)
-        so the dashboard can draw every layer and tensor.
+        stores the extracted spec (not the original ``.h5`` / ``.pt`` file) so the
+        dashboard can draw every layer and tensor. Tensors with more than
+        ``externalize_above`` values upload as compressed binary blobs instead of JSON,
+        so models with millions of parameters work; ``weights="summary"`` sends shapes
+        and statistics only and keeps the weights in your environment.
 
-        Executable families (linear, MLP, tree, small forest) can be queried for
-        explanations and analyses. Summaries and approximate nets need
-        ``inference={"type": "remote", "url": "..."}`` or pre-computed attributions.
+        Executable families (linear, MLP, tree, small forest, dense/conv nets with
+        every weight uploaded) can be queried for explanations and analyses.
+        Summaries and approximate nets need ``inference={"type": "remote", "url": "..."}``
+        or pre-computed attributions. ``progress(stage, done, total)`` is called while
+        tensors upload.
         """
-        spec = estimator_to_spec(estimator, feature_names=feature_names, task=task, framework=framework)
+        extraction = extract_structure(
+            estimator,
+            feature_names=feature_names,
+            task=task,
+            framework=framework,
+            weights=weights,
+            externalize_above=externalize_above,
+        )
+        spec = extraction.spec
         warn_if_large_spec(spec)
         names = list(feature_names) if feature_names is not None else list(spec.get("feature_names") or [])
         feature_list = [dict(item) for item in features] if features is not None else features_from_spec(spec)
@@ -183,6 +205,8 @@ class Models(Resource):
         resolved_outputs = dict(outputs) if outputs else spec.get("outputs")
         resolved_inference = dict(inference) if inference else {"type": "none"}
         extra_meta = {"uploaded_from": "python-client"}
+        if extraction.externalized:
+            extra_meta["binary_tensors"] = len(extraction.tensors)
         if metadata:
             extra_meta.update(dict(metadata))
         if resolved_inference.get("type", "none") == "none" and not spec_is_executable(spec):
@@ -193,6 +217,16 @@ class Models(Resource):
                 UserWarning,
                 stacklevel=2,
             )
+        elif weights == "summary" and resolved_inference.get("type", "none") == "none":
+            warnings.warn(
+                "weights='summary' uploads shapes and statistics only. Kaimei draws the architecture, "
+                "but explain/predict/analyse need a remote inference URL or pre-computed attributions.",
+                UserWarning,
+                stacklevel=2,
+            )
+        # A structure that references binary tensors can only be validated once they exist, so a
+        # large model is registered from its shapes first and receives the real spec afterwards.
+        initial = extraction.summary_spec() if extraction.externalized else spec
         created = self.create(
             name=name,
             task=resolved_task,
@@ -205,19 +239,45 @@ class Models(Resource):
             inference=resolved_inference,
             tags=tags,
             metadata=extra_meta,
-            structure=spec,
+            structure=initial,
             project_id=project_id,
         )
-        model_ref = created.get("id") or created.get("slug") or name
+        model_ref = str(created.get("id") or created.get("slug") or name)
+        if extraction.externalized:
+            self.upload_tensors(model_ref, extraction.tensors, progress=progress)
+            if progress:
+                progress("structure", 0, 1)
+            self._put(f"/v1/models/{model_ref}/structure", spec)
+            if progress:
+                progress("structure", 1, 1)
         if X is not None:
             rows, _names = rows_from_inputs(X, names or None)
             labels = labels_from_target(y) if y is not None else None
             rows, labels = cap_reference_rows(rows, labels)
-            self.upload_reference_data(str(model_ref), rows=rows, labels=labels)
+            self.upload_reference_data(model_ref, rows=rows, labels=labels)
         return created
 
-    def structure(self, model: str):
-        return self._get(f"/v1/models/{model}/structure")
+    def structure(
+        self,
+        model: str,
+        *,
+        root: Optional[str] = None,
+        depth: Optional[int] = None,
+        detail: Optional[str] = None,
+        include_values: Optional[bool] = None,
+        max_inline: Optional[int] = None,
+        tree: Optional[int] = None,
+    ):
+        """The architecture document. ``root`` / ``depth`` cut a huge model to one block."""
+        params = {
+            "root": root,
+            "depth": depth,
+            "detail": detail,
+            "include_values": include_values,
+            "max_inline": max_inline,
+            "tree": tree,
+        }
+        return self._get(f"/v1/models/{model}/structure", compact(params))
 
     def upload_structure(
         self,
@@ -227,27 +287,105 @@ class Models(Resource):
         feature_names: Optional[Sequence[str]] = None,
         task: Optional[str] = None,
         framework: Optional[str] = None,
+        weights: str = "full",
+        externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
+        progress: Optional[Progress] = None,
     ):
         """Attach layers and weights to an existing model.
 
-        Pass a fitted estimator or an already-extracted structure dict.
+        Pass a fitted estimator, an :class:`~kaimei.structure.Extraction`, or an
+        already-extracted structure dict (whose ``$tensor`` references must already be uploaded).
         """
-        if isinstance(estimator_or_spec, Mapping):
-            spec = dict(estimator_or_spec)
+        if isinstance(estimator_or_spec, Extraction):
+            extraction = estimator_or_spec
+        elif isinstance(estimator_or_spec, Mapping):
+            extraction = Extraction(spec=dict(estimator_or_spec))
         else:
-            spec = estimator_to_spec(
-                estimator_or_spec, feature_names=feature_names, task=task, framework=framework
+            extraction = extract_structure(
+                estimator_or_spec,
+                feature_names=feature_names,
+                task=task,
+                framework=framework,
+                weights=weights,
+                externalize_above=externalize_above,
             )
-        return self._put(f"/v1/models/{model}/structure", spec)
+        if extraction.externalized:
+            self.upload_tensors(model, extraction.tensors, progress=progress)
+        return self._put(f"/v1/models/{model}/structure", extraction.spec)
+
+    def upload_tensors(
+        self,
+        model: str,
+        tensors: Mapping[str, Any],
+        *,
+        dtype: str = "f32",
+        progress: Optional[Progress] = None,
+    ):
+        """Upload weight tensors as compressed binary; the spec references them as ``{"$tensor": key}``."""
+        items = list(tensors.items())
+        results = []
+        for index, (key, array) in enumerate(items):
+            if progress:
+                progress("tensors", index, len(items))
+            shape = ",".join(str(int(dim)) for dim in getattr(array, "shape", ()) or (len(array),))
+            results.append(
+                self._client._request(
+                    "PUT",
+                    f"/v1/models/{model}/structure/tensors/{key}",
+                    params={"shape": shape, "dtype": dtype, "compression": "zlib"},
+                    content=encode_tensor(array, dtype),
+                )
+            )
+        if progress:
+            progress("tensors", len(items), len(items))
+        return results
+
+    def tensors(self, model: str):
+        """Binary tensors uploaded for this model, with shapes, sizes and statistics."""
+        return self._get(f"/v1/models/{model}/structure/tensors")
+
+    def delete_tensor(self, model: str, key: str):
+        return self._delete(f"/v1/models/{model}/structure/tensors/{key}")
 
     def delete_structure(self, model: str):
         return self._delete(f"/v1/models/{model}/structure")
 
-    def trace_structure(self, model: str, *, input: Mapping[str, Any]):
-        return self._post(f"/v1/models/{model}/structure/trace", {"input": dict(input)})
+    def trace_structure(
+        self,
+        model: str,
+        *,
+        input: Mapping[str, Any],
+        detail: Optional[str] = None,
+        nodes: Optional[Sequence[str]] = None,
+        tree: Optional[int] = None,
+    ):
+        """Replay one prediction. ``detail="summary"`` returns per-node statistics for large models."""
+        body = {"input": dict(input), "detail": detail, "nodes": list(nodes) if nodes is not None else None, "tree": tree}
+        return self._post(f"/v1/models/{model}/structure/trace", compact(body))
 
-    def structure_parameter(self, model: str, parameter_id: str, *, offset: int = 0, limit: int = 4096):
+    def structure_parameter(
+        self,
+        model: str,
+        parameter_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 4096,
+        stats: bool = False,
+        preview: int = 0,
+    ):
         return self._get(
             f"/v1/models/{model}/structure/parameters/{parameter_id}",
-            {"offset": offset, "limit": limit},
+            compact({"offset": offset, "limit": limit, "stats": stats or None, "preview": preview or None}),
         )
+
+    def structure_parameter_values(self, model: str, parameter_id: str, *, offset: int = 0, limit: int = 1_000_000):
+        """A window of one tensor as a float32 numpy array, fetched as binary."""
+        import numpy
+
+        data = self._client._request(
+            "GET",
+            f"/v1/models/{model}/structure/parameters/{parameter_id}",
+            params={"format": "f32", "offset": offset, "limit": limit},
+            raw=True,
+        )
+        return numpy.frombuffer(data, dtype="<f4").astype(numpy.float32)

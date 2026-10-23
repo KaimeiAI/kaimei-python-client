@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 — 2026-10-23
+
+Models with millions of parameters and thousands of layers upload and render.
+
+### Added
+
+- Tensors with more than `externalize_above` values (default 65,536) leave the JSON spec and
+  upload as zlib-compressed float32 blobs (`PUT /structure/tensors/{key}`), referenced from the
+  spec as `{"$tensor": key}`. `client.models.upload()` registers the model from its shapes,
+  streams the tensors, then sends the real spec; `progress=` reports each stage.
+- `weights="summary"` uploads shapes and statistics only. The dashboard draws the architecture
+  while the weights stay in your environment.
+- `extract_structure()` returns an `Extraction` (spec plus tensors); `estimator_to_spec()` is
+  unchanged and keeps everything inline.
+- PyTorch and Keras layers carry their module `path`, so the API groups them into blocks and
+  detects repeated blocks (`×N`).
+- `client.models.tensors()`, `delete_tensor()`, `structure_parameter_values()` (binary window),
+  `structure(root=, depth=, detail=)` and `trace_structure(detail="summary", nodes=)`.
+
 ## 0.2.2 — 2026-10-13
 
 ### Fixed

@@ -54,7 +54,7 @@ Create an API key in the [dashboard](https://dashboard.kaimei.ai) (session login
 
 ## Upload a trained model from a notebook
 
-The client reads the live estimator in your process and uploads layers and learned weights as JSON. Kaimei does **not** store the original `.h5` / `.pt` / pickle file, and it does not host a binary artifact.
+The client reads the live estimator in your process and uploads layers and learned weights. Small tensors travel inline in the JSON spec; anything larger than 65,536 values is streamed as a zlib-compressed float32 blob and referenced from the spec, so models with millions of parameters upload at about 4 bytes per weight. Kaimei does **not** store the original `.h5` / `.pt` / pickle file, and it does not host a binary artifact.
 
 ```python
 from kaimei import Kaimei
@@ -87,6 +87,26 @@ client.models.upload(
 
 Attach weights to a model you already registered with `client.models.upload_structure(model.id, clf)`.
 
+### Large models
+
+Nothing changes in the call. A PyTorch module with thousands of layers and millions of parameters uploads the same way; the client registers the model from its shapes, streams each large tensor (`progress=` reports `("tensors", done, total)`), then sends the spec that references them. Module names become block paths, so the dashboard folds `encoder.layers.0 … encoder.layers.47` into one `×48` block and loads a tensor only when you open it.
+
+```python
+model = client.models.upload(
+    transformer,                 # torch.nn.Module, 1,200 layers / 110M parameters
+    name="Encoder",
+    feature_names=["token_id"],
+    progress=lambda stage, done, total: print(stage, done, "/", total),
+)
+```
+
+Options:
+
+- `externalize_above=` — values per tensor above which it uploads as binary (default 65,536; `None` keeps everything inline).
+- `weights="summary"` — upload shapes and statistics only. The architecture is drawable; the weights never leave your environment. Explain / predict then need `inference={"type": "remote", ...}`.
+- `extract_structure(estimator, ...)` returns the spec and the tensors without uploading, for inspection or a custom upload.
+- `client.models.tensors(model)` lists what was uploaded; `structure_parameter_values(model, "fc1.weight")` reads a tensor back as float32.
+
 A runnable walkthrough lives in [`examples/upload_sklearn.py`](examples/upload_sklearn.py) and [`examples/upload_sklearn.ipynb`](examples/upload_sklearn.ipynb).
 
 ### Supported estimators
@@ -106,7 +126,7 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](examples/upload_s
 
 Unknown Keras / PyTorch layers are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL.
 
-Large payloads (weights inlined as JSON) warn above ~2 MB and may fail at the proxy or database above ~16 MB.
+The JSON spec warns above ~2 MB; lower `externalize_above` if you see it. Each binary tensor may hold up to 250M values (the API's default cap on a single upload is 512 MB compressed).
 
 ## What you can do
 

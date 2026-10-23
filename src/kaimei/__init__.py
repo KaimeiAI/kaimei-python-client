@@ -27,9 +27,11 @@ from .errors import (
     PermissionError,
     RateLimitError,
 )
-from .structure import StructureError, estimator_to_spec
+from .structure import Extraction, StructureError, estimator_to_spec, extract_structure
 
 __all__ = [
+    "Extraction",
+    "extract_structure",
     "Kaimei",
     "KaimeiError",
     "AuthenticationError",
