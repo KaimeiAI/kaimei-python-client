@@ -26,8 +26,13 @@ class Explanations(Resource):
         """Create an explanation.
 
         ``method`` is ``shap`` (KernelSHAP), ``shapley`` (permutation sampling),
-        ``lime`` (tabular features or image patches), ``gradcam`` (convolutional image models),
-        ``occlusion``, or ``auto``.
+        ``lime`` (tabular features or image patches), ``gradcam`` (image models whose
+        convolutional layers were uploaded), ``occlusion`` (image patches), or ``auto``.
+
+        Image options: ``target_class`` (default: the predicted class), ``grid`` (patches per
+        side; 4, or 8 for images 64 pixels or larger), and for Grad-CAM ``layer`` (a node id;
+        default: the last convolutional feature map). Image explanations return
+        ``options["heatmap"]``, a grid in ``[-1, 1]`` (``[0, 1]`` for Grad-CAM) covering the image.
         """
         body: Dict[str, Any] = {
             "model": model,

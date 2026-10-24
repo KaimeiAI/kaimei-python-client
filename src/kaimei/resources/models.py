@@ -12,6 +12,7 @@ from ..structure import (
     encode_tensor,
     extract_structure,
     features_from_spec,
+    image_shape_of,
     labels_from_target,
     rows_from_inputs,
     spec_is_executable,
@@ -172,8 +173,18 @@ class Models(Resource):
         weights: str = "full",
         externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
         progress: Optional[Progress] = None,
+        input_shape: Optional[Sequence[int]] = None,
+        preprocess: Optional[Mapping[str, Any]] = None,
+        value_range: Optional[Sequence[float]] = None,
     ):
         """Register a fitted estimator and upload its layers and learned weights.
+
+        Image models: ``input_shape`` is required for a convolutional ``torch.nn.Module``, in
+        PyTorch order ``(channels, height, width)``; Keras models report their own. ``preprocess``
+        bakes the input normalization into the graph (``{"mean": [...], "std": [...]}`` on
+        ``[0, 1]`` pixels, like torchvision's ``Normalize``). ``value_range=[0, 255]`` declares
+        the pixel units you will send and the model reads. ``X`` may then be a batch of images,
+        ``(n, h, w, c)`` or ``(n, c, h, w)``.
 
         Call this from a notebook that already holds the trained object. Kaimei
         stores the extracted spec (not the original ``.h5`` / ``.pt`` file) so the
@@ -195,11 +206,17 @@ class Models(Resource):
             framework=framework,
             weights=weights,
             externalize_above=externalize_above,
+            input_shape=input_shape,
+            preprocess=preprocess,
         )
         spec = extraction.spec
         warn_if_large_spec(spec)
         names = list(feature_names) if feature_names is not None else list(spec.get("feature_names") or [])
-        feature_list = [dict(item) for item in features] if features is not None else features_from_spec(spec)
+        feature_list = (
+            [dict(item) for item in features]
+            if features is not None
+            else features_from_spec(spec, value_range=value_range)
+        )
         resolved_task = task or spec.get("task")
         resolved_framework = framework or spec.get("framework") or detect_framework(estimator)
         resolved_outputs = dict(outputs) if outputs else spec.get("outputs")
@@ -251,9 +268,11 @@ class Models(Resource):
             if progress:
                 progress("structure", 1, 1)
         if X is not None:
-            rows, _names = rows_from_inputs(X, names or None)
+            image = image_shape_of(spec)
+            rows, _names = rows_from_inputs(X, names or None, image_shape=image)
             labels = labels_from_target(y) if y is not None else None
-            rows, labels = cap_reference_rows(rows, labels)
+            per_row = int(image[0] * image[1] * image[2]) if image else 1
+            rows, labels = cap_reference_rows(rows, labels, values_per_row=per_row)
             self.upload_reference_data(model_ref, rows=rows, labels=labels)
         return created
 
@@ -290,11 +309,14 @@ class Models(Resource):
         weights: str = "full",
         externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
         progress: Optional[Progress] = None,
+        input_shape: Optional[Sequence[int]] = None,
+        preprocess: Optional[Mapping[str, Any]] = None,
     ):
         """Attach layers and weights to an existing model.
 
         Pass a fitted estimator, an :class:`~kaimei.structure.Extraction`, or an
         already-extracted structure dict (whose ``$tensor`` references must already be uploaded).
+        ``input_shape`` and ``preprocess`` are as for :meth:`upload`.
         """
         if isinstance(estimator_or_spec, Extraction):
             extraction = estimator_or_spec
@@ -308,6 +330,8 @@ class Models(Resource):
                 framework=framework,
                 weights=weights,
                 externalize_above=externalize_above,
+                input_shape=input_shape,
+                preprocess=preprocess,
             )
         if extraction.externalized:
             self.upload_tensors(model, extraction.tensors, progress=progress)

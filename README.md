@@ -118,13 +118,57 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](examples/upload_s
 | sklearn tree | Full node list | Yes |
 | sklearn forest / extra trees | Trees if ≤30 estimators and ≤4,000 nodes; otherwise importances | Yes only when trees are inlined |
 | sklearn `Pipeline` + `StandardScaler` or `(0, 1)` `MinMaxScaler` | Scaler folded or inserted, then the estimator | Same as the final step |
-| Keras / TensorFlow `Dense`, `Conv2D`, pooling, flatten, dropout, LayerNorm | Layer weights | Yes, unless a layer is unrecognized (`approximate`) |
-| `torch.nn` `Linear`, common activations, Dropout, LayerNorm, Embedding | Forward-hook order | Yes, unless a layer is unrecognized (`approximate`) |
+| Keras / TensorFlow `Dense`, `Conv2D` (any stride, padding, dilation, groups), `DepthwiseConv2D`, `SeparableConv2D`, `BatchNormalization`, max / average / global pooling, `Add`, `Multiply`, `Concatenate`, `ZeroPadding2D`, `Rescaling`, `Normalization`, flatten, dropout, LayerNorm; functional graphs and nested base models | Layer weights and the layer graph | Yes, unless a layer is unrecognized (`approximate`) |
+| `torch.nn` CNNs: `Conv2d` (stride, padding, dilation, groups), `BatchNorm2d`, max / average / adaptive pooling, residual `+`, `torch.cat`, squeeze-excitation `*`, `Flatten`, `ReLU6` / `Hardswish` / `SiLU` and the other common activations (ResNet, MobileNet, EfficientNet, DenseNet, VGG, SqueezeNet) | Traced with `torch.fx`, so functional ops are kept | Yes; pass `input_shape=(C, H, W)` |
+| `torch.nn` `Linear`, common activations, Dropout, LayerNorm, Embedding, BatchNorm1d | Forward-hook order | Yes, unless a layer is unrecognized (`approximate`) |
 | Wrapper around any of the above (`model_`, `estimator_`, `best_estimator_`, `module`, …) | Same as the inner estimator | Same as the inner estimator |
 | XGBoost / LightGBM / CatBoost (sklearn API) | `feature_importances_` summary | No — pass `inference` remote or attributions |
 | ONNX, Hugging Face, LLMs | Framework label only | No |
 
-Unknown Keras / PyTorch layers are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL.
+Unknown Keras / PyTorch layers that keep their input's shape are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL. Operations that change the shape and cannot be replayed (for example ShuffleNet's channel shuffle or an upsampling decoder) raise `StructureError(code="unsupported_layers")` naming them; register such models with a remote inference URL instead.
+
+### Image models
+
+Images travel as nested `height × width × channels` lists, channels last, with pixels in `[0, 1]` unless the feature says otherwise. A PyTorch CNN needs its input size (PyTorch order); a Keras model reports its own.
+
+```python
+import torchvision
+
+net = torchvision.models.resnet18(num_classes=10).eval()
+client.models.upload(
+    net,
+    name="Defect classifier",
+    task="multiclass_classification",
+    outputs={"labels": ["ok", "scratch", "dent", ...]},
+    input_shape=(3, 224, 224),
+    # torchvision-style models expect Normalize on [0, 1] pixels; bake it into the graph:
+    preprocess={"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+    X=images,  # optional reference images, (n, 3, 224, 224) or (n, 224, 224, 3)
+)
+
+# A Keras model with a Rescaling(1/255) layer reads 0–255 pixels:
+client.models.upload(keras_model, name="Leaf disease", value_range=[0, 255])
+
+client.explanations.create(model="defect-classifier", input={"image": pixels}, method="gradcam")
+client.explanations.create(model="defect-classifier", input={"image": pixels}, method="occlusion",
+                           options={"grid": 8, "target_class": "dent"})
+```
+
+`gradcam` reads the last convolutional feature map of an uploaded structure (`options={"layer": ...}` picks another). `occlusion` and `lime` work for any image model, including a remote endpoint; that endpoint receives images as nested lists by default, or as `{"b64": ...}` PNG / float32 with `inference={"image_encoding": "png"}`, channels first with `"image_layout": "chw"`, and normalized with `"image_normalize": {"mean": [...], "std": [...]}`. Requests are split to stay under `max_request_bytes` (8 MB).
+
+To explain a new photo, `kaimei.images` (`pip install "kaimei[images]"`) reads it at the model's input size and paints the result:
+
+```python
+from kaimei.images import load_image, overlay_heatmap
+
+model = client.models.retrieve("cats-dogs-photos")
+photo = load_image("my_dog.jpg", model=model)  # a path, bytes, a PIL image or an array
+explanation = client.explanations.create(model=model.slug, input={"photo": photo}, method="gradcam")
+print(explanation.output["label"], explanation.options["layer"])
+overlay_heatmap(photo, explanation.options["heatmap"]).save("my_dog_gradcam.png")
+```
+
+`load_image` scales the shorter side to the model's size and crops the middle, exactly like torchvision's `Resize(n)` + `CenterCrop(n)` (`crop="stretch"` resizes instead), applies the photo's EXIF rotation, and returns pixels in the feature's `value_range`. The dashboard's Explain tab prepares uploaded photos the same way. NumPy arrays can also be passed straight into any request's `input`. [`examples/cats_dogs_gradcam.py`](examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it, and runs Grad-CAM on new photos.
 
 The JSON spec warns above ~2 MB; lower `externalize_above` if you see it. Each binary tensor may hold up to 250M values (the API's default cap on a single upload is 512 MB compressed).
 
@@ -174,7 +218,7 @@ Dashboard sign-in (session token) is also supported via `client.auth.login(...)`
 | `client.auth` | `/v1/auth` |
 | `client.api_keys` | `/v1/api-keys` |
 | `client.organization` | `/v1/organization` |
-| `client.projects` | `/v1/projects` |
+| `client.projects` | `/v1/projects` (`include="summary"`, `overview(project)`) |
 | `client.health()` | `/health` |
 
 Errors raise `kaimei.KaimeiError` subclasses (`AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, …) and expose `.code`, `.type`, and `.status_code`. `PermissionError` remains an alias of `PermissionDeniedError`.

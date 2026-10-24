@@ -136,3 +136,16 @@ def test_upload_registers_then_streams_tensors_then_puts_structure(client):
 
 def test_externalize_threshold_is_sane():
     assert EXTERNALIZE_ABOVE == 65_536
+
+
+def test_many_mid_sized_tensors_are_lifted_when_the_spec_would_be_large():
+    torch = pytest.importorskip("torch")
+    # Twelve 40,000-value layers: each under the default threshold, together ~10 MB of JSON.
+    net = torch.nn.Sequential(*[torch.nn.Linear(200, 200) for _ in range(12)], torch.nn.Linear(200, 1)).eval()
+    names = [f"f{i}" for i in range(200)]
+    compact = extract_structure(net, feature_names=names, task="regression")
+    assert len(compact.tensors) == 12
+    assert len(json.dumps(compact.spec)) < 400_000
+    # A threshold the caller chose is kept as given.
+    chosen = extract_structure(net, feature_names=names, task="regression", externalize_above=50_000)
+    assert not chosen.externalized and len(json.dumps(chosen.spec)) > 2_000_000

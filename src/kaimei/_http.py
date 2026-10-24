@@ -62,6 +62,7 @@ class Transport:
         headers: Optional[Dict[str, str]] = None
         if json_body is not None:
             headers = {"Content-Type": "application/json"}
+            content = encode_json(json_body)
         elif content is not None:
             headers = {"Content-Type": "application/octet-stream"}
         if raw:
@@ -73,7 +74,6 @@ class Transport:
                     verb,
                     url,
                     params=query or None,
-                    json=json_body,
                     content=content,
                     headers=headers,
                 )
@@ -96,6 +96,20 @@ class Transport:
             raise error_from_response(response.status_code, _decode(response))
 
         raise APIConnectionError(f"Could not reach Kaimei at {self.base_url}: {last_error}")
+
+
+def encode_json(body: Any) -> bytes:
+    """Compact JSON, as httpx sends it, that also accepts NumPy arrays and scalars."""
+    return json.dumps(body, default=_json_default, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
+
+
+def _json_default(value: Any) -> Any:
+    # NumPy arrays and scalars (and anything else array-like) serialize as their Python values.
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _empty_or_decode(response: httpx.Response) -> Any:

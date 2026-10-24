@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.4.0 — 2026-10-24
+
+Convolutional image models upload exactly, from PyTorch and Keras, and photos load and explain
+from Python.
+
+### Added
+
+- PyTorch CNNs are traced with `torch.fx` (forward hooks remain the fallback), so residual adds,
+  `torch.cat`, squeeze-excitation gates, `torch.flatten` and functional activations are kept.
+  `Conv2d` with any stride / padding / dilation / groups, `BatchNorm2d`, max / average /
+  adaptive pooling, `ZeroPad2d`, `ReLU6`, `LeakyReLU`, `ELU`, `Hardswish`, `Hardsigmoid`.
+  ResNet, MobileNet v2 / v3, EfficientNet, DenseNet, VGG and SqueezeNet replay to within 1e-7 of
+  PyTorch. Pass `input_shape=(channels, height, width)`.
+- Keras functional graphs (and nested base models, as in transfer learning) keep their branches:
+  `DepthwiseConv2D`, `SeparableConv2D`, `BatchNormalization`, average and global pooling, `Add`,
+  `Multiply`, `Concatenate`, `ZeroPadding2D`, `Rescaling`, `Normalization`, strided and dilated
+  `Conv2D` with `"same"` padding. MobileNetV2, ResNet50 and EfficientNetB0 replay exactly.
+- `preprocess={"mean": [...], "std": [...]}` bakes input normalization into the graph;
+  `value_range=[0, 255]` declares the pixel units an image model reads.
+- Classifiers that end in logits get a softmax / sigmoid appended so Kaimei scores probabilities.
+- `upload(X=...)` accepts image batches, `(n, h, w, c)` or `(n, c, h, w)`, and keeps the reference
+  set under the API's value budget.
+- `client.projects.list(include="summary")` / `retrieve(..., include="summary")` return each
+  project's roll-up (models, 30-day traffic, alerts), and `client.projects.overview(project)` returns
+  the project dashboard: per-model traffic and drift, open alerts, the feature × model attribution
+  matrix, and recent analyses and explanations.
+- `kaimei.images.load_image(source, size=None, *, model=None)` reads a photo (a path, bytes, a PIL
+  image or an array) into the nested list an image feature expects: the shorter side scaled to fit
+  and the middle cropped, exactly as torchvision's `Resize` + `CenterCrop`, with the EXIF rotation
+  applied and pixels in the feature's `value_range`. `model=` takes the size from a model record.
+- `kaimei.images.overlay_heatmap(image, heatmap)` paints an explanation's `options["heatmap"]` over
+  the image, as the dashboard draws it.
+- `pip install "kaimei[images]"` installs NumPy and Pillow for these helpers.
+- `examples/cats_dogs_gradcam.py`: train a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet
+  photos, upload it, and run Grad-CAM on new photos.
+
+### Changed
+
+- An operation that cannot be replayed and changes the tensor shape raises
+  `StructureError(code="unsupported_layers")` naming it, instead of an approximate graph that
+  could not compile.
+- Request bodies may contain NumPy arrays and scalars; they are sent as plain JSON lists and numbers.
+- With the default `externalize_above`, a spec that would still be 2 MB of JSON or more (a CNN's
+  many mid-sized kernels: MobileNetV2 was 16 MB) also lifts tensors above 4,096 values to binary,
+  so it uploads as 1.4 MB. A threshold you pass is used as given.
+
 ## 0.3.0 — 2026-10-23
 
 Models with millions of parameters and thousands of layers upload and render.

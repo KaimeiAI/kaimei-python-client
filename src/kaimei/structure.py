@@ -22,12 +22,16 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from .errors import KaimeiError
 
 MAX_REFERENCE_ROWS = 5000
+#: Image models: the API keeps reference rows × pixel values under this many values.
+MAX_REFERENCE_VALUES = 8_000_000
 WARN_STRUCTURE_BYTES = 2_000_000
 LARGE_STRUCTURE_BYTES = 16_000_000
 #: Tensors with more values than this leave the JSON spec and upload as binary blobs.
 EXTERNALIZE_ABOVE = 65_536
+#: With the default threshold, a spec still over ``WARN_STRUCTURE_BYTES`` lifts tensors above this too.
+COMPACT_EXTERNALIZE_ABOVE = 4_096
 #: Spec keys that hold learned or fitted tensors.
-TENSOR_KEYS = ("weight", "bias", "gamma", "beta", "center", "scale")
+TENSOR_KEYS = ("weight", "bias", "gamma", "beta", "center", "scale", "mean", "var", "std", "offset")
 EXECUTABLE_FAMILIES = {"network", "tree", "ensemble"}
 
 try:
@@ -217,14 +221,19 @@ def cap_reference_rows(
     labels: Optional[Sequence[Any]] = None,
     *,
     limit: int = MAX_REFERENCE_ROWS,
+    values_per_row: int = 1,
 ) -> Tuple[List[Dict[str, Any]], Optional[List[Any]]]:
+    """Keep at most ``limit`` rows; wide rows (images) also stay under the API's value budget."""
+    if values_per_row > 1:
+        limit = max(1, min(limit, MAX_REFERENCE_VALUES // values_per_row))
     capped = [dict(row) for row in rows]
     resolved_labels = list(labels) if labels is not None else None
     if len(capped) <= limit:
         return capped, resolved_labels
     warnings.warn(
         f"Reference data has {len(capped)} rows; Kaimei keeps the first {limit}. "
-        "Pass a representative sample or raise KAIMEI_MAX_REFERENCE_ROWS on the API.",
+        "Pass a representative sample or raise KAIMEI_MAX_REFERENCE_ROWS "
+        "(KAIMEI_MAX_REFERENCE_VALUES for images) on the API.",
         UserWarning,
         stacklevel=3,
     )
@@ -283,6 +292,8 @@ def estimator_to_spec(
     feature_names: Optional[Sequence[str]] = None,
     task: Optional[str] = None,
     framework: Optional[str] = None,
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return a ``kaimei.structure.v1`` document with every tensor inline as JSON lists.
 
@@ -292,7 +303,13 @@ def estimator_to_spec(
     :func:`extract_structure`, which lifts big tensors out for binary upload.
     """
     return extract_structure(
-        estimator, feature_names=feature_names, task=task, framework=framework, externalize_above=None
+        estimator,
+        feature_names=feature_names,
+        task=task,
+        framework=framework,
+        externalize_above=None,
+        input_shape=input_shape,
+        preprocess=preprocess,
     ).spec
 
 
@@ -304,14 +321,27 @@ def extract_structure(
     framework: Optional[str] = None,
     weights: str = "full",
     externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
 ) -> Extraction:
     """Read a fitted estimator into a spec plus the tensors to upload as binary.
 
     ``weights="summary"`` keeps the weights private: the spec carries shapes and statistics
     only, and the model is drawable but not executable on Kaimei.
+
+    ``input_shape`` is the image size in the framework's own order: ``(channels, height,
+    width)`` for PyTorch (required for convolutional modules), ``(height, width, channels)``
+    for Keras (read from the model when built). ``preprocess`` prepends a per-channel
+    ``normalize`` layer, e.g. ``{"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}``
+    for a torchvision model that expects ``Normalize`` on ``[0, 1]`` pixels.
     """
-    raw = _extract_raw(estimator, feature_names, task, framework)
-    return finalize_spec(raw, weights=weights, externalize_above=externalize_above)
+    raw = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess)
+    extraction = finalize_spec(raw, weights=weights, externalize_above=externalize_above)
+    if externalize_above == EXTERNALIZE_ABOVE and spec_payload_bytes(extraction.spec) >= WARN_STRUCTURE_BYTES:
+        # A CNN holds dozens of kernels under the default threshold (MobileNetV2: 16 MB of JSON).
+        # Lift those as well, unless the caller chose a threshold.
+        extraction = finalize_spec(raw, weights=weights, externalize_above=COMPACT_EXTERNALIZE_ABOVE)
+    return extraction
 
 
 def _extract_raw(
@@ -319,6 +349,8 @@ def _extract_raw(
     feature_names: Optional[Sequence[str]],
     task: Optional[str],
     framework: Optional[str],
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The spec with tensors still as numpy arrays (see :func:`finalize_spec`)."""
     _require_numpy()
@@ -348,7 +380,7 @@ def _extract_raw(
     best_rank = -1
     best_source: Any = estimator
     for candidate in candidates:
-        spec = _direct_spec(candidate, names, task, framework)
+        spec = _direct_spec(candidate, names, task, framework, input_shape, preprocess)
         if spec is None:
             continue
         rank = 2 if spec.get("family") in _EXACT_FAMILIES else 1
@@ -378,7 +410,12 @@ def _extract_raw(
 
 
 def _direct_spec(
-    estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
+    estimator: Any,
+    names: List[str],
+    task: Optional[str],
+    framework: Optional[str],
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Convert ``estimator`` if it already has a known fitted shape. No unwrapping."""
     if _is_pipeline(estimator):
@@ -397,14 +434,14 @@ def _direct_spec(
         return _linear_to_spec(estimator, names, task, framework)
     if _is_keras_model(estimator):
         try:
-            return _keras_to_spec(estimator, names, task, framework)
+            return _keras_to_spec(estimator, names, task, framework, input_shape, preprocess)
         except StructureError as exc:
             if exc.code != "unsupported_estimator":
                 raise
             return None
     if _is_torch_module(estimator):
         try:
-            return _torch_to_spec(estimator, names, task, framework)
+            return _torch_to_spec(estimator, names, task, framework, input_shape, preprocess)
         except StructureError as exc:
             if exc.code != "unsupported_estimator":
                 raise
@@ -822,14 +859,278 @@ def _is_torch_module(estimator: Any) -> bool:
     return module.startswith("torch") or hasattr(estimator, "named_parameters") and hasattr(estimator, "forward")
 
 
+class _Unsupported(Exception):
+    """A layer or operation the structure spec cannot express exactly."""
+
+
+_FUSED_TYPES = {"dense", "conv2d", "add", "batchnorm"}
+
+
+def _out(layer: Dict[str, Any]) -> str:
+    """The node that carries a layer's output: ``id__act`` when an activation is fused into it."""
+    act = layer.get("activation")
+    if act and layer.get("type") in _FUSED_TYPES and str(act).lower() not in ("linear", "identity", "none"):
+        return f"{layer['id']}__{act}"
+    return str(layer["id"])
+
+
+_TORCH_ACTIVATIONS = {
+    "ReLU": "relu",
+    "ReLU6": "relu6",
+    "Sigmoid": "sigmoid",
+    "Tanh": "tanh",
+    "GELU": "gelu",
+    "SiLU": "silu",
+    "Softmax": "softmax",
+    "LeakyReLU": "leaky_relu",
+    "ELU": "elu",
+    "Hardswish": "hardswish",
+    "Hardsigmoid": "hardsigmoid",
+}
+_TORCH_FUNCTIONS = {
+    "relu": "relu",
+    "relu_": "relu",
+    "relu6": "relu6",
+    "sigmoid": "sigmoid",
+    "sigmoid_": "sigmoid",
+    "tanh": "tanh",
+    "tanh_": "tanh",
+    "gelu": "gelu",
+    "silu": "silu",
+    "silu_": "silu",
+    "softmax": "softmax",
+    "leaky_relu": "leaky_relu",
+    "leaky_relu_": "leaky_relu",
+    "elu": "elu",
+    "elu_": "elu",
+    "hardswish": "hardswish",
+    "hardswish_": "hardswish",
+    "hardsigmoid": "hardsigmoid",
+    "hardsigmoid_": "hardsigmoid",
+}
+#: Calls that return their input unchanged at inference.
+_TORCH_PASSTHROUGH = {
+    "dropout",
+    "dropout2d",
+    "contiguous",
+    "clone",
+    "detach",
+    "float",
+    "to",
+    "type_as",
+    "alpha_dropout",
+}
+#: Calls that compute shapes or indices, never activations.
+_TORCH_SHAPE_CALLS = {"size", "dim", "getattr", "numel"}
+#: Arithmetic call names (operator, torch and Tensor-method spellings) → operation.
+_ARITHMETIC = {
+    "add": "add",
+    "iadd": "add",
+    "add_": "add",
+    "radd": "add",
+    "sub": "sub",
+    "isub": "sub",
+    "sub_": "sub",
+    "mul": "mul",
+    "imul": "mul",
+    "mul_": "mul",
+    "rmul": "mul",
+    "truediv": "div",
+    "itruediv": "div",
+    "div": "div",
+    "div_": "div",
+}
+
+
+def _arr(value: Any) -> Any:
+    """A tensor or array as a float numpy array."""
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value, dtype=float)
+
+
+def _two(value: Any) -> List[int]:
+    if isinstance(value, (list, tuple)):
+        items = [int(item) for item in value]
+        return items * 2 if len(items) == 1 else items[:2]
+    return [int(value), int(value)]
+
+
+def _hwc(shape: Optional[Sequence[int]]) -> Optional[List[int]]:
+    """A torch ``(C, H, W)`` / ``(F,)`` shape as Kaimei's ``[H, W, C]`` / ``[F]``."""
+    if shape is None:
+        return None
+    dims = [int(dim) for dim in shape]
+    if len(dims) == 3:
+        return [dims[1], dims[2], dims[0]]
+    return dims
+
+
+def _torch_module_layers(name: str, module: Any, in_shape: Optional[Sequence[int]]) -> List[Dict[str, Any]]:
+    """One leaf module as spec layers (``[]`` when it is the identity at inference).
+
+    ``in_shape`` is the torch shape of the module's input without the batch axis, when known.
+    Raises :class:`_Unsupported` for anything the spec cannot reproduce exactly.
+    """
+    cls = type(module).__name__
+    base: Dict[str, Any] = {"id": _safe_id(name), "path": name, "label": name}
+    rank = len(in_shape) if in_shape is not None else None
+    if cls == "Linear":
+        if rank is not None and rank != 1:
+            raise _Unsupported(f"{cls} on a {rank + 1}-D tensor")
+        weight = _arr(module.weight)
+        bias = _arr(module.bias).ravel() if module.bias is not None else np.zeros(weight.shape[0])
+        return [{**base, "type": "dense", "units": int(weight.shape[0]), "weight": weight, "bias": bias}]
+    if cls == "Conv2d":
+        if getattr(module, "padding_mode", "zeros") != "zeros":
+            raise _Unsupported(f"Conv2d padding_mode='{module.padding_mode}'")
+        weight = _arr(module.weight)
+        padding = module.padding if isinstance(module.padding, str) else _two(module.padding)
+        return [
+            {
+                **base,
+                "type": "conv2d",
+                "weight": weight,
+                "bias": _arr(module.bias).ravel() if module.bias is not None else np.zeros(weight.shape[0]),
+                "stride": _two(module.stride),
+                "padding": padding,
+                "dilation": _two(module.dilation),
+                "groups": int(module.groups),
+            }
+        ]
+    if cls in ("BatchNorm2d", "BatchNorm1d"):
+        if module.running_mean is None or module.running_var is None:
+            raise _Unsupported(f"{cls} without running statistics")
+        if rank is not None and rank != (3 if cls == "BatchNorm2d" else 1):
+            raise _Unsupported(f"{cls} on a {rank + 1}-D tensor")
+        layer = {
+            **base,
+            "type": "batchnorm",
+            "mean": _arr(module.running_mean),
+            "var": _arr(module.running_var),
+            "eps": float(module.eps),
+        }
+        if module.affine:
+            layer["gamma"] = _arr(module.weight)
+            layer["beta"] = _arr(module.bias)
+        return [layer]
+    if cls in ("MaxPool2d", "AvgPool2d"):
+        if cls == "MaxPool2d" and _two(module.dilation) != [1, 1]:
+            raise _Unsupported("MaxPool2d with dilation")
+        if cls == "AvgPool2d" and getattr(module, "divisor_override", None):
+            raise _Unsupported("AvgPool2d divisor_override")
+        kernel = _two(module.kernel_size)
+        layer = {
+            **base,
+            "type": "maxpool" if cls == "MaxPool2d" else "avgpool",
+            "kernel": kernel,
+            "stride": _two(module.stride) if module.stride is not None else kernel,
+            "padding": _two(module.padding),
+            "ceil_mode": bool(module.ceil_mode),
+        }
+        if cls == "AvgPool2d":
+            layer["count_include_pad"] = bool(module.count_include_pad)
+        return [layer]
+    if cls in ("AdaptiveAvgPool2d", "AdaptiveMaxPool2d"):
+        return [
+            {
+                **base,
+                "type": "adaptive_avgpool" if cls == "AdaptiveAvgPool2d" else "adaptive_maxpool",
+                "output_size": _adaptive_size(module.output_size, in_shape),
+            }
+        ]
+    if cls == "Flatten":
+        if int(module.start_dim) != 1 or int(module.end_dim) != -1:
+            raise _Unsupported("Flatten that keeps more than the batch axis")
+        if rank == 3:
+            return [{**base, "type": "flatten", "order": "chw"}]
+        return []
+    if cls in _TORCH_ACTIVATIONS:
+        act = _TORCH_ACTIVATIONS[cls]
+        if cls == "Softmax" and (rank not in (None, 1) or getattr(module, "dim", -1) not in (None, 1, -1)):
+            raise _Unsupported("Softmax over a spatial tensor")
+        layer = {**base, "type": "activation", "activation": act}
+        if cls == "LeakyReLU":
+            layer["alpha"] = float(module.negative_slope)
+        if cls == "ELU":
+            layer["alpha"] = float(module.alpha)
+        return [layer]
+    if cls in ("Dropout", "Dropout2d", "AlphaDropout"):
+        return [{**base, "type": "dropout", "rate": float(getattr(module, "p", 0.0))}]
+    if cls == "Identity":
+        return []
+    if cls == "ZeroPad2d":
+        left, right, top, bottom = (int(item) for item in module.padding)
+        return [{**base, "type": "pad2d", "padding": [top, bottom, left, right]}]
+    if cls == "LayerNorm":
+        if rank not in (None, 1):
+            raise _Unsupported("LayerNorm over a spatial tensor")
+        layer = {**base, "type": "layernorm", "eps": float(module.eps)}
+        if module.elementwise_affine:
+            layer["gamma"] = _arr(module.weight)
+            layer["beta"] = _arr(module.bias)
+        return [layer]
+    if cls == "Embedding":
+        return [{**base, "type": "embedding", "weight": _arr(module.weight)}]
+    raise _Unsupported(cls)
+
+
+def _adaptive_size(output_size: Any, in_shape: Optional[Sequence[int]]) -> List[int]:
+    sizes = list(output_size) if isinstance(output_size, (list, tuple)) else [output_size, output_size]
+    if len(sizes) == 1:
+        sizes = sizes * 2
+    resolved = []
+    for axis, size in enumerate(sizes[:2]):
+        if size is None:
+            if in_shape is None or len(in_shape) != 3:
+                raise _Unsupported("adaptive pooling with an open output size")
+            size = in_shape[1 + axis]
+        resolved.append(int(size))
+    return resolved
+
+
+def _torch_image_shape(estimator: Any, input_shape: Optional[Sequence[int]]) -> Optional[List[int]]:
+    """``(C, H, W)`` for a convolutional module, ``None`` for a vector model."""
+    if input_shape is not None:
+        dims = [int(dim) for dim in input_shape]
+        if len(dims) == 4:
+            dims = dims[1:]
+        if len(dims) == 3:
+            return dims
+        if len(dims) == 1:
+            return None
+        raise StructureError(
+            "input_shape must be (channels, height, width) for a PyTorch image model.",
+            code="invalid_structure",
+            param="input_shape",
+        )
+    for _name, module in estimator.named_modules():
+        if type(module).__name__ in ("Conv2d", "BatchNorm2d", "MaxPool2d", "AvgPool2d", "AdaptiveAvgPool2d"):
+            raise StructureError(
+                "This PyTorch model is convolutional. Pass input_shape=(channels, height, width) so Kaimei "
+                "knows the image size, e.g. input_shape=(3, 224, 224).",
+                code="invalid_structure",
+                param="input_shape",
+            )
+    return None
+
+
 def _torch_to_spec(
-    estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
+    estimator: Any,
+    names: List[str],
+    task: Optional[str],
+    framework: Optional[str],
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     try:
         import torch
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise StructureError("torch is not installed.", code="unsupported_estimator") from exc
 
+    image = _torch_image_shape(estimator, input_shape)
+    if image is not None:
+        return _torch_image_spec(estimator, names, task, framework, image, preprocess, torch)
     resolved = task or "regression"
     leaves = [
         (name, module)
@@ -871,8 +1172,9 @@ def _torch_to_spec(
         module = modules.get(name)
         if module is None:
             continue
-        layer = _torch_layer(name, module, torch)
-        if layer is None:
+        try:
+            layers.extend(_torch_module_layers(name, module, None))
+        except _Unsupported:
             unsupported = True
             layers.append(
                 {
@@ -883,8 +1185,6 @@ def _torch_to_spec(
                     "rate": 0,
                 }
             )
-            continue
-        layers.append(layer)
     spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
@@ -902,50 +1202,474 @@ def _torch_to_spec(
     return spec
 
 
-def _torch_layer(name: str, module: Any, torch: Any) -> Optional[Dict[str, Any]]:
-    """One leaf module as a spec layer. ``path`` is the module name, so the API groups layers into blocks."""
-    cls = type(module).__name__
-    node_id = _safe_id(name)
-    if cls == "Linear":
-        weight = module.weight.detach().cpu().numpy()
-        bias = module.bias.detach().cpu().numpy() if module.bias is not None else np.zeros(weight.shape[0])
-        return {
-            "id": node_id,
-            "path": name,
-            "type": "dense",
-            "units": int(weight.shape[0]),
-            "weight": weight,
-            "bias": np.asarray(bias).ravel(),
-            "label": name,
-        }
-    activations = {
-        "ReLU": "relu",
-        "Sigmoid": "sigmoid",
-        "Tanh": "tanh",
-        "GELU": "gelu",
-        "SiLU": "silu",
-        "Softmax": "softmax",
+def _torch_image_spec(
+    estimator: Any,
+    names: List[str],
+    task: Optional[str],
+    framework: Optional[str],
+    image: List[int],
+    preprocess: Optional[Mapping[str, Any]],
+    torch: Any,
+) -> Dict[str, Any]:
+    channels, height, width = image
+    name = names[0] if names else "image"
+    estimator = getattr(estimator, "eval", lambda: estimator)()
+    example = torch.zeros(1, channels, height, width)
+    layers: List[Dict[str, Any]] = [
+        {"id": "input", "type": "input", "names": [name], "shape": [height, width, channels], "label": "Image"}
+    ]
+    entry = _preprocess_layer(layers, preprocess, "input")
+    how = "traced"
+    try:
+        body, approximate, final_shape = _torch_fx_layers(estimator, example, entry, torch)
+    except _Untraceable:
+        body, approximate, final_shape = _torch_hook_layers(estimator, example, entry, torch)
+        how = "hooks"
+    layers.extend(body)
+    resolved, labels, added = _classification_head(layers, task, final_shape)
+    summary = (
+        "PyTorch module traced op by op; residual adds, concatenations and pooling are kept."
+        if how == "traced"
+        else "PyTorch module read in forward-hook order (it could not be traced), so functional "
+        "operations such as residual adds are not visible; the graph is drawn but not executed."
+    )
+    if added:
+        summary += f" A {added} turns the final logits into probabilities."
+    spec: Dict[str, Any] = {
+        "format": "kaimei.structure.v1",
+        "family": "network",
+        "framework": framework or "pytorch",
+        "architecture": "cnn",
+        "task": resolved,
+        "feature_names": [name],
+        "summary": summary,
+        "layers": layers,
     }
-    if cls in activations:
-        return {"id": node_id, "path": name, "type": "activation", "activation": activations[cls], "label": name}
-    if cls == "Dropout":
-        return {"id": node_id, "path": name, "type": "dropout", "rate": float(getattr(module, "p", 0.0)), "label": name}
-    if cls == "LayerNorm":
-        layer: Dict[str, Any] = {"id": node_id, "path": name, "type": "layernorm", "label": name, "eps": float(module.eps)}
-        if module.elementwise_affine:
-            layer["gamma"] = module.weight.detach().cpu().numpy()
-            layer["beta"] = module.bias.detach().cpu().numpy()
-        return layer
-    if cls == "Embedding":
-        return {
-            "id": node_id,
-            "path": name,
-            "type": "embedding",
-            "weight": module.weight.detach().cpu().numpy(),
-            "label": name,
+    if labels:
+        spec["labels"] = labels
+        spec["outputs"] = {"labels": labels}
+    if approximate or how == "hooks":
+        spec["approximate"] = True
+    return spec
+
+
+class _Untraceable(Exception):
+    """``torch.fx`` could not trace the module."""
+
+
+def _torch_fx_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tuple:
+    """Layers from a ``torch.fx`` trace: every module call and functional op, in graph order."""
+    try:
+        from torch.fx import symbolic_trace
+        from torch.fx.passes.shape_prop import ShapeProp
+
+        traced = symbolic_trace(estimator)
+        with torch.no_grad():
+            ShapeProp(traced).propagate(example)
+    except Exception as exc:
+        raise _Untraceable(str(exc)) from exc
+    modules = dict(traced.named_modules())
+    produced: Dict[str, str] = {}
+    shapes: Dict[str, Optional[List[int]]] = {}
+    paths: Dict[str, str] = {}
+    layers: List[Dict[str, Any]] = []
+    taken: set = {"input", entry}
+    approximate = False
+    problems: List[str] = []
+    failed: set = set()
+    final: Optional[str] = None
+    final_shape: Optional[List[int]] = None
+
+    def tensor_shape(node: Any) -> Optional[List[int]]:
+        meta = node.meta.get("tensor_meta") if hasattr(node, "meta") else None
+        shape = getattr(meta, "shape", None)
+        return [int(dim) for dim in shape][1:] if shape is not None else None
+
+    def unique(raw: str) -> str:
+        base = _safe_id(raw)
+        candidate, index = base, 1
+        while candidate in taken:
+            index += 1
+            candidate = f"{base}_{index}"
+        taken.add(candidate)
+        return candidate
+
+    for node in traced.graph.nodes:
+        if node.op == "placeholder":
+            if "placeholder" in paths:
+                raise StructureError(
+                    "PyTorch models with more than one input are not supported.", code="invalid_structure"
+                )
+            paths["placeholder"] = node.name
+            produced[node.name] = entry
+            shapes[node.name] = tensor_shape(node)
+            continue
+        if node.op == "output":
+            result = node.args[0]
+            if isinstance(result, (list, tuple)):
+                result = result[0]
+            if hasattr(result, "name") and result.name in failed:
+                continue  # the unsupported op upstream is what gets reported
+            if isinstance(result, dict) or not hasattr(result, "name") or result.name not in produced:
+                raise StructureError("The model must return one tensor.", code="invalid_structure")
+            final = produced[result.name]
+            final_shape = shapes.get(result.name)
+            continue
+        if any(arg.name in failed for arg in _fx_args(node)):
+            failed.add(node.name)  # downstream of an op already reported
+            continue
+        out_shape = tensor_shape(node)
+        inputs = [arg for arg in _fx_args(node) if hasattr(arg, "name") and arg.name in produced]
+        if out_shape is None:
+            # sizes, shapes and other bookkeeping values; only tensor nodes become layers
+            continue
+        in_shapes = [shapes.get(arg.name) for arg in inputs]
+        sources = [produced[arg.name] for arg in inputs]
+        if node.op == "call_module":
+            path = str(node.target)
+        else:
+            parent = paths.get(inputs[0].name, "") if inputs else ""
+            path = f"{parent.rsplit('.', 1)[0]}.{node.name}" if "." in parent else node.name
+        try:
+            if node.op == "call_module":
+                converted = _torch_module_layers(path, modules[node.target], in_shapes[0] if in_shapes else None)
+            elif node.op in ("call_function", "call_method"):
+                converted = _torch_call_layers(node, in_shapes, out_shape)
+            else:
+                raise _Unsupported(f"{node.op} {node.target}")
+        except _Unsupported as exc:
+            if len(sources) == 1 and in_shapes[0] == out_shape:
+                approximate = True
+                converted = [{"type": "dropout", "rate": 0, "label": f"{exc} (not replayed)"}]
+            else:
+                problems.append(f"{exc} at {path}")
+                failed.add(node.name)
+                continue
+        if not converted:
+            if not sources:
+                problems.append(f"{node.target} at {path}")
+                failed.add(node.name)
+                continue
+            produced[node.name] = sources[0]
+            shapes[node.name] = out_shape
+            paths[node.name] = paths.get(inputs[0].name, path)
+            continue
+        previous = sources
+        for index, layer in enumerate(converted):
+            layer = dict(layer)
+            layer["id"] = unique(layer.get("id") or (node.name if index == 0 else f"{node.name}_{index}"))
+            layer.setdefault("path", path)
+            layer.setdefault("label", path)
+            layer["inputs"] = list(previous)
+            layers.append(layer)
+            previous = [_out(layer)]
+        produced[node.name] = previous[0]
+        shapes[node.name] = out_shape
+        paths[node.name] = path
+    if problems:
+        listed = "; ".join(problems[:6]) + ("; …" if len(problems) > 6 else "")
+        raise StructureError(
+            "This model uses operations Kaimei cannot replay yet: "
+            f"{listed}. Register it with a remote inference endpoint instead; image explanations then use "
+            "occlusion and LIME.",
+            code="unsupported_layers",
+        )
+    if final is None:
+        raise StructureError("The traced model has no output.", code="invalid_structure")
+    if not layers or _out(layers[-1]) != final:
+        layers.append({"id": unique("output"), "type": "dropout", "rate": 0, "label": "Output", "inputs": [final]})
+    return layers, approximate, _hwc(final_shape)
+
+
+def _fx_args(node: Any) -> List[Any]:
+    found: List[Any] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif hasattr(value, "op") and hasattr(value, "name") and hasattr(value, "meta"):
+            found.append(value)
+
+    walk(node.args)
+    walk(node.kwargs)
+    return found
+
+
+def _call_name(node: Any) -> str:
+    target = node.target
+    name = target if isinstance(target, str) else getattr(target, "__name__", str(target))
+    return name.strip("_") if name.startswith("__") else name
+
+
+def _arg(node: Any, index: int, key: str, default: Any = None) -> Any:
+    if key in node.kwargs:
+        return node.kwargs[key]
+    if len(node.args) > index:
+        return node.args[index]
+    return default
+
+
+def _number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _torch_call_layers(node: Any, in_shapes: List[Optional[List[int]]], out_shape: List[int]) -> List[Dict[str, Any]]:
+    """A ``call_function`` / ``call_method`` node as spec layers (``[]`` when it is the identity)."""
+    name = _call_name(node)
+    rank = len(in_shapes[0]) if in_shapes and in_shapes[0] is not None else None
+    tensors = len(in_shapes)
+    if name in _TORCH_PASSTHROUGH:
+        return []
+    if name == "stochastic_depth" and not _arg(node, 3, "training", False):
+        return []  # torchvision StochasticDepth is the identity at inference
+    if name in _TORCH_FUNCTIONS:
+        act = _TORCH_FUNCTIONS[name]
+        layer: Dict[str, Any] = {"type": "activation", "activation": act}
+        if act == "softmax" and (rank != 1 or _arg(node, 1, "dim", -1) not in (1, -1)):
+            raise _Unsupported("softmax over a spatial tensor")
+        if act == "leaky_relu":
+            layer["alpha"] = float(_arg(node, 1, "negative_slope", 0.01))
+        if act == "elu":
+            layer["alpha"] = float(_arg(node, 1, "alpha", 1.0))
+        return [layer]
+    if name in ("clamp", "clamp_", "hardtanh", "hardtanh_"):
+        low = _number(_arg(node, 1, "min", _arg(node, 1, "min_val", None)))
+        high = _number(_arg(node, 2, "max", _arg(node, 2, "max_val", None)))
+        if low == 0.0 and high is None:
+            return [{"type": "activation", "activation": "relu"}]
+        if low == 0.0 and high == 6.0:
+            return [{"type": "activation", "activation": "relu6"}]
+        raise _Unsupported(f"{name}({low}, {high})")
+    if name in _ARITHMETIC:
+        return _torch_arithmetic(node, name, in_shapes, out_shape)
+    if name in ("cat", "concat"):
+        dim = int(_arg(node, 1, "dim", 0))
+        if rank is None or dim not in (1, -rank):
+            raise _Unsupported(f"cat along dim {dim}")
+        return [{"type": "concat"}] if tensors > 1 else []
+    if name in ("flatten", "view", "reshape", "squeeze", "unsqueeze"):
+        if name == "flatten" and int(_arg(node, 1, "start_dim", 0)) != 1:
+            raise _Unsupported("flatten that merges the batch axis")
+        in_shape = in_shapes[0] if in_shapes else None
+        if in_shape is None or int(np.prod(out_shape)) != int(np.prod(in_shape)):
+            raise _Unsupported(f"{name} to {tuple(out_shape)}")
+        if list(out_shape) == list(in_shape):
+            return []
+        if len(out_shape) == 1:
+            # (C, H, W) → (C·H·W) reads channels first; (C, 1, 1) → (C) keeps the order either way.
+            if rank == 3 and int(in_shape[1]) * int(in_shape[2]) != 1:
+                return [{"type": "flatten", "order": "chw"}]
+            return []
+        if rank == 1 and len(out_shape) == 3 and int(out_shape[1]) * int(out_shape[2]) == 1:
+            return []  # (C) → (C, 1, 1): a per-channel gate; multiply broadcasts it
+        raise _Unsupported(f"{name} to {tuple(out_shape)}")
+    if name in ("expand_as", "expand") and len(in_shapes) >= 1:
+        return []  # broadcasting is implicit in multiply
+    if name in ("adaptive_avg_pool2d", "adaptive_max_pool2d"):
+        return [
+            {
+                "type": "adaptive_avgpool" if "avg" in name else "adaptive_maxpool",
+                "output_size": _adaptive_size(_arg(node, 1, "output_size", 1), in_shapes[0] if in_shapes else None),
+            }
+        ]
+    if name in ("max_pool2d", "avg_pool2d"):
+        kernel = _two(_arg(node, 1, "kernel_size"))
+        stride = _arg(node, 2, "stride", None)
+        layer = {
+            "type": "maxpool" if name == "max_pool2d" else "avgpool",
+            "kernel": kernel,
+            "stride": _two(stride) if stride not in (None, [], ()) else kernel,
+            "padding": _two(_arg(node, 3, "padding", 0)),
         }
-    del torch
-    return None
+        if name == "max_pool2d":
+            if _two(_arg(node, 4, "dilation", 1)) != [1, 1]:
+                raise _Unsupported("max_pool2d with dilation")
+            layer["ceil_mode"] = bool(_arg(node, 5, "ceil_mode", False))
+        else:
+            layer["ceil_mode"] = bool(_arg(node, 4, "ceil_mode", False))
+            layer["count_include_pad"] = bool(_arg(node, 5, "count_include_pad", True))
+            if _arg(node, 6, "divisor_override", None):
+                raise _Unsupported("avg_pool2d divisor_override")
+        return [layer]
+    if name == "mean" and rank == 3:
+        dims = _arg(node, 1, "dim", None)
+        dims = [dims] if isinstance(dims, int) else list(dims or [])
+        if sorted(int(dim) % 4 for dim in dims) == [2, 3]:
+            return [{"type": "adaptive_avgpool", "output_size": [1, 1]}]
+        raise _Unsupported(f"mean over dims {dims}")
+    if name == "pad" and rank == 3:
+        pad = list(_arg(node, 1, "pad", []))
+        mode = _arg(node, 2, "mode", "constant")
+        if len(pad) != 4 or mode != "constant":
+            raise _Unsupported(f"pad {pad} mode={mode}")
+        left, right, top, bottom = (int(item) for item in pad)
+        return [
+            {"type": "pad2d", "padding": [top, bottom, left, right], "value": float(_arg(node, 3, "value", 0.0) or 0.0)}
+        ]
+    if tensors == 0 or name in _TORCH_SHAPE_CALLS:
+        raise _Unsupported(name)
+    raise _Unsupported(name)
+
+
+def _torch_arithmetic(
+    node: Any, name: str, in_shapes: List[Optional[List[int]]], out_shape: List[int]
+) -> List[Dict[str, Any]]:
+    """Tensor ± tensor (residual), tensor × tensor (gating), or tensor with a constant (rescaling)."""
+    operands = list(node.args[:2])
+    tensors = [operand for operand in operands if hasattr(operand, "meta")]
+    kind = _ARITHMETIC[name]
+    if len(tensors) == 2:
+        if node.kwargs.get("alpha", 1) != 1:
+            raise _Unsupported(f"{name} with alpha")
+        if kind == "add":
+            if in_shapes[0] != in_shapes[1]:
+                raise _Unsupported("add with broadcasting")
+            return [{"type": "add"}]
+        if kind == "mul":
+            return [{"type": "multiply"}]
+        raise _Unsupported(f"{kind} of two tensors")
+    constant = next((_number(operand) for operand in operands if not hasattr(operand, "meta")), None)
+    if len(tensors) != 1 or constant is None:
+        raise _Unsupported(name)
+    first_is_tensor = hasattr(operands[0], "meta")
+    if kind == "add":
+        return [{"type": "normalize", "offset": constant, "label": f"+ {constant:g}"}]
+    if kind == "sub" and first_is_tensor:
+        return [{"type": "normalize", "offset": -constant, "label": f"− {constant:g}"}]
+    if kind == "mul":
+        return [{"type": "normalize", "scale": constant, "label": f"× {constant:g}"}]
+    if kind == "div" and first_is_tensor and constant != 0:
+        return [{"type": "normalize", "scale": 1.0 / constant, "label": f"÷ {constant:g}"}]
+    raise _Unsupported(f"{name} with a constant")
+
+
+def _torch_hook_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tuple:
+    """Fallback for untraceable modules: leaf modules in call order, shapes from hooks."""
+    calls: List[tuple] = []
+    handles = []
+    leaves = [
+        (name, module)
+        for name, module in estimator.named_modules()
+        if module is not estimator and not list(module.children())
+    ]
+
+    def hook(name: str):
+        def record(module: Any, inputs: Any, output: Any) -> None:
+            first = inputs[0] if isinstance(inputs, (list, tuple)) and inputs else inputs
+            in_shape = list(first.shape)[1:] if hasattr(first, "shape") else None
+            out_shape = list(output.shape)[1:] if hasattr(output, "shape") else None
+            calls.append((name, module, in_shape, out_shape))
+
+        return record
+
+    for name, module in leaves:
+        handles.append(module.register_forward_hook(hook(name)))
+    try:
+        with torch.no_grad():
+            estimator(example)
+    finally:
+        for handle in handles:
+            handle.remove()
+    layers: List[Dict[str, Any]] = []
+    previous = entry
+    current: Optional[List[int]] = list(example.shape)[1:]
+    for name, module, in_shape, out_shape in calls:
+        if in_shape is not None and current is not None and len(current) == 3 and len(in_shape) == 1:
+            layers.append({"id": f"{_safe_id(name)}__flatten", "type": "flatten", "order": "chw", "inputs": [previous]})
+            previous = layers[-1]["id"]
+        try:
+            converted = _torch_module_layers(name, module, in_shape)
+        except _Unsupported:
+            converted = [
+                {"id": _safe_id(name), "path": name, "type": "dropout", "rate": 0, "label": type(module).__name__}
+            ]
+        for layer in converted:
+            layer = dict(layer)
+            layer["inputs"] = [previous]
+            layers.append(layer)
+            previous = _out(layer)
+        current = out_shape
+    return layers, True, _hwc(current)
+
+
+def _preprocess_layer(layers: List[Dict[str, Any]], preprocess: Optional[Mapping[str, Any]], entry: str) -> str:
+    """Prepend a ``normalize`` layer (torchvision ``Normalize`` / Keras ``Rescaling``) when asked."""
+    if not preprocess:
+        return entry
+    layer: Dict[str, Any] = {"id": "preprocess", "type": "normalize", "label": "Preprocess", "inputs": [entry]}
+    for key in ("mean", "std", "scale", "offset"):
+        if preprocess.get(key) is not None:
+            value = preprocess[key]
+            layer[key] = np.asarray(value, dtype=float) if isinstance(value, (list, tuple)) else float(value)
+    unknown = set(preprocess) - {"mean", "std", "scale", "offset"}
+    if unknown:
+        raise StructureError(
+            f"preprocess takes mean, std, scale and offset; got {sorted(unknown)}.",
+            code="invalid_structure",
+            param="preprocess",
+        )
+    layers.append(layer)
+    return "preprocess"
+
+
+def _classification_head(layers: List[Dict[str, Any]], task: Optional[str], final_shape: Optional[List[int]]) -> tuple:
+    """Resolve the task and, for classifiers that end in logits, append the softmax / sigmoid."""
+    last = layers[-1] if layers else {}
+    act = last.get("activation") if last.get("type") in ("dense", "conv2d", "activation") else None
+    width = int(np.prod(final_shape)) if final_shape else int(last.get("units") or 0)
+    resolved = task
+    if resolved is None:
+        if act == "softmax" and width > 1:
+            resolved = "multiclass_classification"
+        elif act == "sigmoid" and width <= 1:
+            resolved = "binary_classification"
+        else:
+            resolved = "regression"
+    labels = None
+    added = None
+    if resolved == "multiclass_classification":
+        labels = [f"class_{i}" for i in range(width)] if width else None
+        if act != "softmax":
+            layers.append(
+                {
+                    "id": "softmax",
+                    "type": "activation",
+                    "activation": "softmax",
+                    "label": "softmax",
+                    "inputs": [_out(last)],
+                }
+            )
+            added = "softmax"
+    elif resolved == "binary_classification":
+        if width == 1 and act != "sigmoid":
+            layers.append(
+                {
+                    "id": "sigmoid",
+                    "type": "activation",
+                    "activation": "sigmoid",
+                    "label": "sigmoid",
+                    "inputs": [_out(last)],
+                }
+            )
+            added = "sigmoid"
+        elif width == 2 and act != "softmax":
+            layers.append(
+                {
+                    "id": "softmax",
+                    "type": "activation",
+                    "activation": "softmax",
+                    "label": "softmax",
+                    "inputs": [_out(last)],
+                }
+            )
+            added = "softmax"
+    return resolved, labels, added
 
 
 def _safe_id(name: str) -> str:
@@ -984,23 +1708,36 @@ def _framework_from_module(module: str) -> Optional[str]:
     return None
 
 
-def features_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Build a model feature schema from an extracted structure document."""
+def features_from_spec(spec: Dict[str, Any], value_range: Optional[Sequence[float]] = None) -> List[Dict[str, Any]]:
+    """Build a model feature schema from an extracted structure document.
+
+    ``value_range`` (e.g. ``[0, 255]``) is the pixel units an image model reads; Kaimei's
+    default is ``[0, 1]``.
+    """
     names = [str(name) for name in spec.get("feature_names") or []]
+    shape = image_shape_of(spec)
+    if shape and names:
+        feature: Dict[str, Any] = {
+            "name": names[0],
+            "type": "image",
+            "height": int(shape[0]),
+            "width": int(shape[1]),
+            "channels": int(shape[2]),
+        }
+        if value_range is not None:
+            feature["value_range"] = [float(value_range[0]), float(value_range[1])]
+        return [feature]
+    return [{"name": name, "type": "numeric"} for name in names]
+
+
+def image_shape_of(spec: Mapping[str, Any]) -> Optional[List[int]]:
+    """``[height, width, channels]`` when the spec's input is an image."""
     layers = list(spec.get("layers") or [])
     first = layers[0] if layers else {}
     shape = first.get("shape") if str(first.get("type") or "") == "input" else None
-    if shape and len(shape) == 3 and names:
-        return [
-            {
-                "name": names[0],
-                "type": "image",
-                "height": int(shape[0]),
-                "width": int(shape[1]),
-                "channels": int(shape[2]),
-            }
-        ]
-    return [{"name": name, "type": "numeric"} for name in names]
+    if shape and len(shape) == 3:
+        return [int(dim) for dim in shape]
+    return None
 
 
 def _importance_to_spec(
@@ -1034,20 +1771,58 @@ def _importance_to_spec(
 
 _KERAS_LAYER_TYPES = {
     "Activation",
+    "Add",
+    "AveragePooling2D",
     "BatchNormalization",
+    "Concatenate",
     "Conv2D",
     "Dense",
+    "DepthwiseConv2D",
     "Dropout",
     "ELU",
     "Flatten",
     "GELU",
+    "GlobalAveragePooling2D",
+    "GlobalMaxPooling2D",
     "InputLayer",
     "LayerNormalization",
     "LeakyReLU",
     "MaxPool2D",
     "MaxPooling2D",
+    "Multiply",
     "ReLU",
+    "Rescaling",
+    "SeparableConv2D",
     "Softmax",
+    "ZeroPadding2D",
+}
+#: Keras activation function names → Kaimei activations (``None`` = linear).
+_KERAS_ACTIVATIONS = {
+    "linear": None,
+    "identity": None,
+    "none": None,
+    "relu": "relu",
+    "relu6": "relu6",
+    "sigmoid": "sigmoid",
+    "tanh": "tanh",
+    "softmax": "softmax",
+    "gelu": "gelu",
+    "silu": "silu",
+    "swish": "silu",
+    "elu": "elu",
+    "leaky_relu": "leaky_relu",
+    "hard_sigmoid": "hardsigmoid",
+    "hard_silu": "hardswish",
+    "hard_swish": "hardswish",
+}
+_KERAS_PASSTHROUGH = {
+    "Dropout",
+    "SpatialDropout1D",
+    "SpatialDropout2D",
+    "GaussianNoise",
+    "GaussianDropout",
+    "AlphaDropout",
+    "ActivityRegularization",
 }
 
 
@@ -1061,29 +1836,33 @@ def _is_keras_model(estimator: Any) -> bool:
     return any(type(layer).__name__ in _KERAS_LAYER_TYPES and hasattr(layer, "get_weights") for layer in layers)
 
 
-def _keras_activation(layer: Any) -> Optional[str]:
-    act = getattr(layer, "activation", None)
-    if act is None:
-        name = type(layer).__name__.lower()
-        aliases = {
-            "relu": "relu",
-            "sigmoid": "sigmoid",
-            "tanh": "tanh",
-            "softmax": "softmax",
-            "gelu": "gelu",
-            "elu": "relu",
-        }
-        return aliases.get(name)
-    if isinstance(act, str):
-        name = act
+def _keras_activation_of(value: Any) -> tuple:
+    """``(activation, alpha)`` for a Keras activation function or name; raises for unknown ones."""
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        name = value
     else:
-        name = str(getattr(act, "__name__", None) or getattr(act, "name", "") or "")
+        name = str(getattr(value, "__name__", None) or getattr(value, "name", "") or "")
     name = name.lower()
-    if name in {"", "linear", "identity", "none"}:
+    if name not in _KERAS_ACTIVATIONS:
+        raise _Unsupported(f"activation '{name}'")
+    act = _KERAS_ACTIVATIONS[name]
+    alpha = {"leaky_relu": 0.2, "elu": 1.0}.get(act or "")
+    return act, alpha
+
+
+def _keras_activation(layer: Any) -> Optional[str]:
+    """The activation applied by ``layer`` (a fused one, or an activation layer), for task inference."""
+    try:
+        if getattr(layer, "activation", None) is not None:
+            return _keras_activation_of(layer.activation)[0]
+        converted = _keras_layer(layer, type(layer).__name__)
+    except (_Unsupported, StructureError):
         return None
-    if name == "swish":
-        return "silu"
-    return name
+    if converted and converted[-1].get("type") == "activation":
+        return converted[-1].get("activation")
+    return None
 
 
 def _keras_input_shape(estimator: Any) -> Optional[List[int]]:
@@ -1104,9 +1883,16 @@ def _keras_input_shape(estimator: Any) -> Optional[List[int]]:
 
 
 def _keras_to_spec(
-    estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
+    estimator: Any,
+    names: List[str],
+    task: Optional[str],
+    framework: Optional[str],
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    shape = _keras_input_shape(estimator)
+    shape = [int(dim) for dim in input_shape] if input_shape is not None else _keras_input_shape(estimator)
+    if shape and len(shape) == 4:
+        shape = shape[1:]
     if not names:
         if shape and len(shape) == 1:
             names = [f"x{i}" for i in range(shape[0])]
@@ -1125,46 +1911,43 @@ def _keras_to_spec(
         if act == "sigmoid" and units <= 1:
             resolved = "binary_classification"
             classes = classes or ["negative", "positive"]
-        elif act == "softmax" and units > 1:
+        elif act == "softmax" and (units > 1 or units == 0):
             resolved = "multiclass_classification"
-            classes = classes or [f"class_{i}" for i in range(units)]
         else:
             resolved = "regression"
+    image = shape is not None and len(shape) >= 3
     layers: List[Dict[str, Any]] = []
-    if shape and len(shape) >= 3:
+    if image and shape is not None:
         layers.append(
-            {
-                "id": "input",
-                "type": "input",
-                "names": names[:1] or ["image"],
-                "shape": shape[-3:],
-                "label": "Image",
-            }
+            {"id": "input", "type": "input", "names": names[:1] or ["image"], "shape": shape[-3:], "label": "Image"}
         )
         names = names[:1] or ["image"]
     else:
         layers.append({"id": "input", "type": "input", "names": names})
-    unsupported = False
-    conv = False
-    for layer in estimator.layers:
-        kind = type(layer).__name__
-        if kind == "InputLayer":
-            continue
-        converted = _keras_layer(layer, kind)
-        if converted is None:
-            unsupported = True
-            layers.append(
-                {
-                    "id": _safe_id(str(getattr(layer, "name", kind))),
-                    "type": "dropout",
-                    "rate": 0,
-                    "label": kind,
-                }
-            )
-            continue
-        if converted.get("type") == "conv2d":
-            conv = True
-        layers.append(converted)
+    entry = _preprocess_layer(layers, preprocess, "input")
+    state = _KerasState(layers)
+    outputs = _keras_emit_model(estimator, [entry], "", state)
+    if len(outputs) != 1:
+        raise StructureError("Keras models with more than one output are not supported.", code="invalid_structure")
+    if state.problems:
+        listed = "; ".join(state.problems[:6]) + ("; …" if len(state.problems) > 6 else "")
+        raise StructureError(
+            f"This model uses layers Kaimei cannot replay yet: {listed}. Register it with a remote "
+            "inference endpoint instead; image explanations then use occlusion and LIME.",
+            code="unsupported_layers",
+        )
+    if _out(layers[-1]) != outputs[0]:
+        layers.append({"id": "output", "type": "dropout", "rate": 0, "label": "Output", "inputs": [outputs[0]]})
+    conv = any(layer.get("type") == "conv2d" for layer in layers)
+    added = None
+    if image or state.graph:
+        width = int(layers[-1].get("units") or 0) or (len(classes) if classes else 0)
+        resolved_head, head_labels, added = _classification_head(layers, resolved, [width] if width else None)
+        if classes is None and head_labels:
+            classes = head_labels
+    elif resolved == "multiclass_classification" and classes is None:
+        units = int(layers[-1].get("units") or 0)
+        classes = [f"class_{i}" for i in range(units)] if units else None
     spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
@@ -1172,124 +1955,419 @@ def _keras_to_spec(
         "architecture": "cnn" if conv else "mlp",
         "task": resolved,
         "feature_names": names,
-        "summary": "Keras / TensorFlow model read from layer weights.",
+        "summary": "Keras / TensorFlow model read from layer weights."
+        + (f" A {added} turns the final logits into probabilities." if added else ""),
         "layers": layers,
     }
     if classes is not None:
         spec["labels"] = classes
         spec["outputs"] = {"labels": classes}
-        if layers and layers[-1].get("type") == "dense":
+        if layers[-1].get("type") == "dense":
             layers[-1]["output_labels"] = classes
-    if unsupported:
+    if state.approximate:
         spec["approximate"] = True
-        spec["summary"] = (
-            "Keras / TensorFlow model read from layer weights. "
-            "Unrecognised layers are passed through."
-        )
+        spec["summary"] = "Keras / TensorFlow model read from layer weights. Unrecognised layers are passed through."
     return spec
 
 
-def _keras_layer(layer: Any, kind: str) -> Optional[Dict[str, Any]]:
-    node_id = _safe_id(str(getattr(layer, "name", kind)))
-    if kind == "Dense":
-        weights = list(layer.get_weights())
-        if not weights:
+class _KerasState:
+    def __init__(self, layers: List[Dict[str, Any]]):
+        self.layers = layers
+        self.taken = {layer["id"] for layer in layers}
+        self.problems: List[str] = []
+        self.approximate = False
+        self.graph = False
+
+    def unique(self, raw: str) -> str:
+        base = _safe_id(raw)
+        candidate, index = base, 1
+        while candidate in self.taken:
+            index += 1
+            candidate = f"{base}_{index}"
+        self.taken.add(candidate)
+        return candidate
+
+
+def _keras_graph(model: Any) -> Optional[tuple]:
+    """``([(layer, inbound layer names)], output names)`` for a functional model, ``None`` if sequential."""
+    try:
+        config = model.get_config() if hasattr(model, "get_config") else None
+    except Exception:
+        return None
+    entries = config.get("layers") if isinstance(config, dict) else None
+    if not isinstance(entries, list) or not any(
+        isinstance(item, dict) and item.get("inbound_nodes") for item in entries
+    ):
+        return None
+    by_name = {str(getattr(layer, "name", "")): layer for layer in model.layers}
+    order = []
+    for item in entries:
+        name = str(item.get("name") or (item.get("config") or {}).get("name") or "")
+        layer = by_name.get(name)
+        if layer is None:
+            continue
+        nodes = item.get("inbound_nodes") or []
+        if len(nodes) > 1:
             raise StructureError(
-                f"Keras layer '{node_id}' has no weights. Fit the model before uploading.",
-                code="unsupported_estimator",
+                f"Keras layer '{name}' is shared between branches, which the structure spec cannot express.",
+                code="unsupported_layers",
             )
-        kernel = np.asarray(weights[0], dtype=float)
-        weight = kernel.T
-        bias = np.asarray(weights[1], dtype=float).ravel() if len(weights) > 1 else np.zeros(weight.shape[0])
-        payload: Dict[str, Any] = {
-            "id": node_id,
-            "path": str(getattr(layer, "name", None) or node_id),
-            "type": "dense",
-            "units": int(weight.shape[0]),
-            "weight": weight,
-            "bias": bias,
-            "label": str(getattr(layer, "name", None) or "Dense"),
-        }
-        activation = _keras_activation(layer)
-        if activation:
-            payload["activation"] = activation
-        return payload
-    if kind == "Conv2D":
-        weights = list(layer.get_weights())
-        if not weights:
-            raise StructureError(
-                f"Keras layer '{node_id}' has no weights. Fit the model before uploading.",
-                code="unsupported_estimator",
-            )
-        kernel = np.asarray(weights[0], dtype=float)
-        if kernel.ndim != 4:
-            return None
-        # Keras (kh, kw, in, out) → Kaimei (out, in, kh, kw)
-        weight = np.transpose(kernel, (3, 2, 0, 1))
-        bias = np.asarray(weights[1], dtype=float).ravel() if len(weights) > 1 else np.zeros(weight.shape[0])
-        padding = str(getattr(layer, "padding", "valid")).lower()
-        strides = getattr(layer, "strides", (1, 1))
-        stride = int(strides[0] if isinstance(strides, (list, tuple)) else strides)
-        payload = {
-            "id": node_id,
-            "path": str(getattr(layer, "name", None) or node_id),
-            "type": "conv2d",
-            "weight": weight,
-            "bias": bias,
-            "padding": int(weight.shape[2] // 2) if padding == "same" else 0,
-            "stride": stride,
-            "label": str(getattr(layer, "name", None) or "Conv"),
-        }
-        activation = _keras_activation(layer)
-        if activation:
-            payload["activation"] = activation
-        return payload
-    if kind in {"Flatten"}:
-        return {"id": node_id, "type": "flatten", "label": str(getattr(layer, "name", None) or "Flatten")}
-    if kind in {"MaxPooling2D", "MaxPool2D"}:
-        size = getattr(layer, "pool_size", 2)
-        pool = int(size[0] if isinstance(size, (list, tuple)) else size)
-        strides = getattr(layer, "strides", pool)
-        stride = int(strides[0] if isinstance(strides, (list, tuple)) else strides)
-        return {
-            "id": node_id,
-            "type": "maxpool",
-            "kernel": pool,
-            "stride": stride,
-            "label": str(getattr(layer, "name", None) or "Max pool"),
-        }
-    if kind == "Dropout":
-        return {
-            "id": node_id,
-            "type": "dropout",
-            "rate": float(getattr(layer, "rate", 0.0)),
-            "label": str(getattr(layer, "name", None) or "Dropout"),
-        }
-    if kind in {"ReLU", "Softmax", "Activation", "GELU"}:
-        activation = _keras_activation(layer)
-        if not activation:
-            return None
-        return {"id": node_id, "type": "activation", "activation": activation, "label": activation}
-    if kind == "LayerNormalization":
-        weights = list(layer.get_weights()) if hasattr(layer, "get_weights") else []
-        payload = {
-            "id": node_id,
-            "path": str(getattr(layer, "name", None) or node_id),
-            "type": "layernorm",
-            "label": str(getattr(layer, "name", None) or "LayerNorm"),
-            "eps": float(getattr(layer, "epsilon", 1e-5)),
-        }
-        if len(weights) >= 2:
-            payload["gamma"] = np.asarray(weights[0], dtype=float)
-            payload["beta"] = np.asarray(weights[1], dtype=float)
-        return payload
+        order.append((layer, _keras_inbound(nodes)))
+    raw_outputs = (config or {}).get("output_layers") or []
+    if raw_outputs and isinstance(raw_outputs[0], str):
+        raw_outputs = [raw_outputs]  # one output, written flat
+    outputs = [_keras_history_name(item) for item in raw_outputs]
+    return order, [name for name in outputs if name]
+
+
+def _keras_history_name(item: Any) -> Optional[str]:
+    if isinstance(item, (list, tuple)) and item and isinstance(item[0], str):
+        return item[0]
     return None
 
 
-def rows_from_inputs(X: Any, names: Optional[Sequence[str]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Turn a DataFrame, 2D array, or list of dicts into reference-data rows."""
+def _keras_inbound(nodes: Any) -> List[str]:
+    """Inbound layer names in order, for both the Keras 2 and Keras 3 config formats."""
+    found: List[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            history = (
+                (value.get("config") or {}).get("keras_history")
+                if value.get("class_name") == "__keras_tensor__"
+                else None
+            )
+            if history:
+                found.append(str(history[0]))
+                return
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, (list, tuple)):
+            if (
+                len(value) >= 3
+                and isinstance(value[0], str)
+                and isinstance(value[1], int)
+                and isinstance(value[2], int)
+            ):
+                found.append(value[0])
+                return
+            for item in value:
+                walk(item)
+
+    walk(nodes)
+    return found
+
+
+def _keras_emit_model(model: Any, entry: List[str], prefix: str, state: _KerasState) -> List[str]:
+    """Emit the layers of a (possibly nested) Keras model; returns the ids of its outputs."""
+    graph = _keras_graph(model)
+    if graph is None:
+        current = list(entry)
+        for layer in model.layers:
+            if type(layer).__name__ == "InputLayer":
+                continue
+            current = _keras_emit_layer(layer, current, prefix, state)
+        return current
+    state.graph = True
+    order, outputs = graph
+    produced: Dict[str, List[str]] = {}
+    for layer, inbound in order:
+        name = str(getattr(layer, "name", ""))
+        if type(layer).__name__ == "InputLayer":
+            produced[name] = list(entry)
+            continue
+        sources = [source for item in inbound for source in produced.get(item, [])]
+        produced[name] = _keras_emit_layer(layer, sources, prefix, state)
+    if not outputs:
+        return produced[str(getattr(order[-1][0], "name", ""))]
+    return [source for name in outputs for source in produced.get(name, [])]
+
+
+def _keras_emit_layer(layer: Any, sources: List[str], prefix: str, state: _KerasState) -> List[str]:
+    kind = type(layer).__name__
+    name = str(getattr(layer, "name", kind))
+    if _is_keras_model(layer) and hasattr(layer, "get_config"):
+        return _keras_emit_model(layer, sources, f"{prefix}{name}.", state)
+    try:
+        converted = _keras_layer(layer, kind)
+    except _Unsupported as exc:
+        converted = None
+        reason = str(exc)
+    else:
+        reason = kind
+    if converted is None:
+        if len(sources) == 1 and _keras_keeps_shape(layer):
+            state.approximate = True
+            converted = [{"id": name, "type": "dropout", "rate": 0, "label": f"{kind} (not replayed)"}]
+        else:
+            state.problems.append(f"{reason} ({prefix}{name})")
+            return sources[:1]
+    if not converted:
+        return sources[:1]
+    previous = list(sources)
+    for layer_spec in converted:
+        layer_spec = dict(layer_spec)
+        layer_spec["id"] = state.unique(f"{prefix}{layer_spec.get('id') or name}")
+        layer_spec["path"] = f"{prefix}{layer_spec.get('path') or name}"
+        layer_spec["inputs"] = previous
+        state.layers.append(layer_spec)
+        previous = [_out(layer_spec)]
+    return previous
+
+
+def _keras_keeps_shape(layer: Any) -> bool:
+    try:
+        return tuple(layer.input.shape) == tuple(layer.output.shape)
+    except Exception:
+        return False
+
+
+def _keras_weights(layer: Any, node_id: str) -> List[Any]:
+    weights = list(layer.get_weights())
+    if not weights:
+        raise StructureError(
+            f"Keras layer '{node_id}' has no weights. Fit the model before uploading.",
+            code="unsupported_estimator",
+        )
+    return [np.asarray(weight, dtype=float) for weight in weights]
+
+
+def _keras_padding(layer: Any) -> str:
+    padding = str(getattr(layer, "padding", "valid")).lower()
+    if padding not in ("same", "valid"):
+        raise _Unsupported(f"padding='{padding}'")
+    return padding
+
+
+def _keras_channels_last(layer: Any) -> None:
+    data_format = getattr(layer, "data_format", None)
+    if data_format not in (None, "channels_last"):
+        raise _Unsupported(f"data_format='{data_format}'")
+
+
+def _with_activation(payload: Dict[str, Any], layer: Any) -> Dict[str, Any]:
+    act, alpha = _keras_activation_of(getattr(layer, "activation", None))
+    if act:
+        payload["activation"] = act
+        if alpha is not None:
+            payload["alpha"] = alpha
+    return payload
+
+
+def _keras_layer(layer: Any, kind: str) -> Optional[List[Dict[str, Any]]]:
+    """One Keras layer as spec layers (``[]`` for the identity, ``None`` when unknown)."""
+    node_id = _safe_id(str(getattr(layer, "name", kind)))
+    label = str(getattr(layer, "name", None) or kind)
+    base: Dict[str, Any] = {"id": node_id, "path": label, "label": label}
+    if kind == "Dense":
+        try:
+            rank = len(layer.input.shape)
+        except Exception:
+            rank = None
+        if rank is not None and rank > 2:
+            raise _Unsupported("Dense on a spatial tensor (add Flatten or global pooling first)")
+        weights = _keras_weights(layer, node_id)
+        weight = weights[0].T
+        bias = weights[1].ravel() if len(weights) > 1 else np.zeros(weight.shape[0])
+        return [
+            _with_activation(
+                {**base, "type": "dense", "units": int(weight.shape[0]), "weight": weight, "bias": bias}, layer
+            )
+        ]
+    if kind == "Conv2D":
+        _keras_channels_last(layer)
+        weights = _keras_weights(layer, node_id)
+        if weights[0].ndim != 4:
+            return None
+        # Keras (kh, kw, in / groups, out) → Kaimei (out, in / groups, kh, kw)
+        weight = np.transpose(weights[0], (3, 2, 0, 1))
+        bias = weights[1].ravel() if len(weights) > 1 else np.zeros(weight.shape[0])
+        payload = {
+            **base,
+            "type": "conv2d",
+            "weight": weight,
+            "bias": bias,
+            "padding": _keras_padding(layer),
+            "stride": _two(getattr(layer, "strides", 1)),
+            "dilation": _two(getattr(layer, "dilation_rate", 1)),
+            "groups": int(getattr(layer, "groups", 1) or 1),
+        }
+        return [_with_activation(payload, layer)]
+    if kind in ("DepthwiseConv2D", "SeparableConv2D"):
+        _keras_channels_last(layer)
+        weights = _keras_weights(layer, node_id)
+        depthwise = weights[0]  # (kh, kw, in, multiplier)
+        kh, kw, channels, multiplier = depthwise.shape
+        # output channel c·m + j reads input channel c with kernel [:, :, c, j]
+        dw_weight = np.transpose(depthwise, (2, 3, 0, 1)).reshape(channels * multiplier, 1, kh, kw)
+        common = {
+            "type": "conv2d",
+            "padding": _keras_padding(layer),
+            "stride": _two(getattr(layer, "strides", 1)),
+            "dilation": _two(getattr(layer, "dilation_rate", 1)),
+            "groups": int(channels),
+        }
+        if kind == "DepthwiseConv2D":
+            bias = weights[1].ravel() if len(weights) > 1 else np.zeros(channels * multiplier)
+            return [_with_activation({**base, **common, "weight": dw_weight, "bias": bias}, layer)]
+        pointwise = weights[1]  # (1, 1, in·multiplier, out)
+        pw_weight = np.transpose(pointwise, (3, 2, 0, 1))
+        bias = weights[2].ravel() if len(weights) > 2 else np.zeros(pw_weight.shape[0])
+        return [
+            {
+                **base,
+                **common,
+                "id": f"{node_id}.depthwise",
+                "path": f"{label}.depthwise",
+                "weight": dw_weight,
+                "bias": np.zeros(channels * multiplier),
+            },
+            _with_activation(
+                {
+                    **base,
+                    "id": f"{node_id}.pointwise",
+                    "path": f"{label}.pointwise",
+                    "type": "conv2d",
+                    "weight": pw_weight,
+                    "bias": bias,
+                    "padding": "valid",
+                },
+                layer,
+            ),
+        ]
+    if kind == "BatchNormalization":
+        axis = getattr(layer, "axis", -1)
+        axis = axis[0] if isinstance(axis, (list, tuple)) and len(axis) == 1 else axis
+        try:
+            rank = len(layer.input.shape)
+        except Exception:
+            rank = None
+        if axis != -1 and (rank is None or axis != rank - 1):
+            raise _Unsupported(f"BatchNormalization over axis {axis}")
+        weights = list(layer.get_weights())
+        values = [np.asarray(weight, dtype=float).ravel() for weight in weights]
+        index = 0
+        payload = {**base, "type": "batchnorm", "eps": float(getattr(layer, "epsilon", 1e-3))}
+        if getattr(layer, "scale", True):
+            payload["gamma"] = values[index]
+            index += 1
+        if getattr(layer, "center", True):
+            payload["beta"] = values[index]
+            index += 1
+        payload["mean"], payload["var"] = values[index], values[index + 1]
+        return [payload]
+    if kind in ("MaxPooling2D", "MaxPool2D", "AveragePooling2D", "AvgPool2D"):
+        _keras_channels_last(layer)
+        pool = _two(getattr(layer, "pool_size", 2))
+        strides = getattr(layer, "strides", None)
+        padding = _keras_padding(layer)
+        payload = {
+            **base,
+            "type": "maxpool" if kind.startswith("Max") else "avgpool",
+            "kernel": pool,
+            "stride": _two(strides) if strides is not None else pool,
+            "padding": padding,
+        }
+        if payload["type"] == "avgpool":
+            payload["count_include_pad"] = False  # TensorFlow averages only the real pixels
+        return [payload]
+    if kind in ("GlobalAveragePooling2D", "GlobalAvgPool2D", "GlobalMaxPooling2D", "GlobalMaxPool2D"):
+        _keras_channels_last(layer)
+        return [{**base, "type": "global_avgpool" if "Av" in kind else "global_maxpool"}]
+    if kind == "Flatten":
+        return [{**base, "type": "flatten"}]
+    if kind == "Reshape":
+        target = [int(dim) for dim in getattr(layer, "target_shape", ())]
+        if len(target) == 1:
+            return [{**base, "type": "flatten"}]
+        if len(target) == 3 and target[0] * target[1] == 1:
+            return []  # (C) → (1, 1, C): a per-channel gate, already 1×1×C in Kaimei
+        raise _Unsupported(f"Reshape to {tuple(target)}")
+    if kind in _KERAS_PASSTHROUGH:
+        return [{**base, "type": "dropout", "rate": float(getattr(layer, "rate", 0.0) or 0.0)}]
+    if kind in ("Activation", "Softmax", "GELU"):
+        source = getattr(layer, "activation", None) if kind == "Activation" else kind.lower()
+        act, alpha = _keras_activation_of(source)
+        if not act:
+            return []
+        payload = {**base, "type": "activation", "activation": act}
+        if alpha is not None:
+            payload["alpha"] = alpha
+        return [payload]
+    if kind == "ReLU":
+        max_value = getattr(layer, "max_value", None)
+        slope = float(getattr(layer, "negative_slope", 0.0) or 0.0)
+        threshold = float(getattr(layer, "threshold", 0.0) or 0.0)
+        if threshold != 0.0:
+            raise _Unsupported("ReLU with a threshold")
+        if slope and max_value is None:
+            return [{**base, "type": "activation", "activation": "leaky_relu", "alpha": slope}]
+        if not slope and max_value is None:
+            return [{**base, "type": "activation", "activation": "relu"}]
+        if not slope and max_value is not None and float(max_value) == 6.0:
+            return [{**base, "type": "activation", "activation": "relu6"}]
+        raise _Unsupported(f"ReLU(max_value={max_value}, negative_slope={slope})")
+    if kind == "LeakyReLU":
+        negative: Any = getattr(layer, "negative_slope", None)
+        if negative is None:
+            negative = getattr(layer, "alpha", 0.3)
+        return [{**base, "type": "activation", "activation": "leaky_relu", "alpha": float(negative)}]
+    if kind == "ELU":
+        return [{**base, "type": "activation", "activation": "elu", "alpha": float(getattr(layer, "alpha", 1.0))}]
+    if kind == "Add":
+        return [{**base, "type": "add"}]
+    if kind == "Multiply":
+        return [{**base, "type": "multiply"}]
+    if kind == "Concatenate":
+        if int(getattr(layer, "axis", -1)) not in (-1, 3):
+            raise _Unsupported(f"Concatenate along axis {layer.axis}")
+        return [{**base, "type": "concat"}]
+    if kind == "ZeroPadding2D":
+        _keras_channels_last(layer)
+        (top, bottom), (left, right) = getattr(layer, "padding", ((1, 1), (1, 1)))
+        return [{**base, "type": "pad2d", "padding": [int(top), int(bottom), int(left), int(right)]}]
+    if kind == "Rescaling":
+        return [
+            {
+                **base,
+                "type": "normalize",
+                "scale": _keras_scalar_or_array(getattr(layer, "scale", 1.0)),
+                "offset": _keras_scalar_or_array(getattr(layer, "offset", 0.0)),
+            }
+        ]
+    if kind == "Normalization":
+        if getattr(layer, "invert", False):
+            raise _Unsupported("Normalization(invert=True)")
+        mean = np.asarray(layer.mean, dtype=float).ravel()
+        variance = np.asarray(layer.variance, dtype=float).ravel()
+        return [{**base, "type": "normalize", "mean": mean, "std": np.maximum(np.sqrt(variance), 1e-7)}]
+    if kind == "LayerNormalization":
+        weights = list(layer.get_weights()) if hasattr(layer, "get_weights") else []
+        payload = {**base, "type": "layernorm", "eps": float(getattr(layer, "epsilon", 1e-5))}
+        if len(weights) >= 2:
+            payload["gamma"] = np.asarray(weights[0], dtype=float)
+            payload["beta"] = np.asarray(weights[1], dtype=float)
+        return [payload]
+    return None
+
+
+def _keras_scalar_or_array(value: Any) -> Any:
+    array = np.asarray(value, dtype=float).ravel()
+    return float(array[0]) if array.size == 1 else array
+
+
+def rows_from_inputs(
+    X: Any, names: Optional[Sequence[str]] = None, *, image_shape: Optional[Sequence[int]] = None
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Turn a DataFrame, 2D array, or list of dicts into reference-data rows.
+
+    With ``image_shape=[height, width, channels]``, ``X`` may be a batch of images:
+    ``(n, h, w, c)``, PyTorch's ``(n, c, h, w)`` (transposed here), or ``(n, h, w)`` grayscale.
+    """
     if X is None:
         raise StructureError("X is required.", code="invalid_reference_rows", param="X")
+    if image_shape is not None and not (isinstance(X, list) and X and isinstance(X[0], Mapping)):
+        return _image_rows(X, names, image_shape)
     if hasattr(X, "to_dict") and hasattr(X, "columns"):
         resolved = [str(name) for name in names] if names is not None else [str(col) for col in list(X.columns)]
         records = X.to_dict(orient="records")
@@ -1312,6 +2390,34 @@ def rows_from_inputs(X: Any, names: Optional[Sequence[str]] = None) -> Tuple[Lis
     for raw in array:
         rows.append({name: _json_number(value) for name, value in zip(resolved, raw.tolist())})
     return rows, resolved
+
+
+def _image_rows(
+    X: Any, names: Optional[Sequence[str]], image_shape: Sequence[int]
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    numpy = _require_numpy()
+    height, width, channels = (int(dim) for dim in image_shape)
+    array = numpy.asarray(X.detach().cpu().numpy() if hasattr(X, "detach") else X, dtype=float)
+    if array.ndim == 3 and channels == 1:
+        array = array[..., None]
+    if array.ndim != 4:
+        raise StructureError(
+            f"Image reference data must be a batch of {height}×{width}×{channels} images; got shape {array.shape}.",
+            code="invalid_reference_rows",
+            param="X",
+        )
+    if tuple(array.shape[1:]) != (height, width, channels):
+        if tuple(array.shape[1:]) == (channels, height, width):
+            array = array.transpose(0, 2, 3, 1)
+        else:
+            raise StructureError(
+                f"Images are {tuple(array.shape[1:])}; the model reads {height}×{width}×{channels} "
+                f"(or {channels}×{height}×{width} channels first).",
+                code="invalid_reference_rows",
+                param="X",
+            )
+    name = str(list(names)[0]) if names else "image"
+    return [{name: image.round(6).tolist()} for image in array], [name]
 
 
 def _json_number(value: Any) -> Any:
