@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.5.0 — 2026-10-25
+
+Image explanations are drawn the way the dashboard draws them, and read like a sentence.
+
+The summary, the numbered regions, the focus region, the evidence check and blurred hiding read
+fields that the matching Kaimei API release adds to image explanations (`options["summary"]`,
+`regions[].anchor`, `focus`, `evidence`, `background`). Against an older API the helpers still
+work from the heatmap alone: the summary is built from it, regions follow the patch grid, and the
+evidence pictures are marked "not measured".
+
+### Added
+
+- `kaimei.images.render_explanation(image, explanation, mode="heatmap" | "spotlight" | "original")`
+  renders an explanation record from its `method`, `heatmap` and `focus`, in the dashboard's
+  palette: amber → orange → red where the photo is evidence *for* the explained class, light
+  blue → indigo where it is evidence *against* it (the SHAP convention), at most 66% opaque so the
+  features under the hot spot stay visible; a white outline around the focus region (the smallest
+  region holding half of the evidence); or the photo dimmed outside that region. Grad-CAM maps are
+  smoothed with half-pixel-centre bilinear upsampling; occlusion / LIME region maps stay blocky.
+- `explanation_summary(explanation)` returns the API's plain-English `options["summary"]` (and builds
+  one from the heatmap for older records; regression records speak of "the prediction" with three
+  significant figures). `evidence_images(image, explanation)` returns the photo, the photo with its
+  focus hidden and the photo with only the focus kept — the pictures behind `options["evidence"]`,
+  hidden the way the API hid them: blurred when `evidence["fill"] == "blur"`, grayed otherwise.
+- `gaussian_blur(image, sigma)`: the API's blur for hiding regions (radius `ceil(3σ)`, mirrored
+  edges, separable, float64), NumPy only and identical to the server's to 1e-12.
+- `numbered_regions(explanation, for_count=5, against_count=3)`: the regions to call out, numbered
+  1..N across two groups — the strongest *for* the class, then the strongest *against* it (Grad-CAM:
+  its strongest regions only) — each with its name, attribution and `anchor` (a point inside the
+  region for a number badge).
+- `focus_mask`, `region_mask(explanation, name_or_id, h, w)` and `focus_threshold` expose the masks;
+  `upsample_heatmap`, `heat_color` and `heat_alpha` are the building blocks. All of it is NumPy +
+  Pillow and byte-identical to the dashboard (`tests/fixtures/heatmap_render.json` pins the shared
+  cases; blurred evidence thumbnails may differ from a JavaScript renderer by one byte), and
+  `import kaimei.images` loads neither Pillow nor matplotlib.
+- `plot_explanation(image, explanation, *, modes=("heatmap", "spotlight"), figure=None, title=None,
+  for_regions=5, against_regions=3)` draws the dashboard's view with matplotlib (optional): the
+  photo with the model's answer, the heatmap with numbered badges on the strongest regions, and the
+  spotlight; below, the evidence check (full photo, focus blurred or hidden, only the focus) with
+  the model's probability for each; on the right, spanning both rows, a bar chart of the same
+  numbered regions ("For cat" in orange, "Against cat" in blue) with a plain sentence saying what a
+  bar measures. The summary is the title, wrapped to the actual figure or subfigure width.
+  `BAR_POSITIVE` / `BAR_NEGATIVE` (`#f97316` / `#5b5bf5`) and `SUPPORT_GRADIENT` /
+  `AGAINST_GRADIENT` are the matching chart colours.
+- `examples/photos/`: six Oxford-IIIT Pet test photos (three cats, three dogs) and a cat-and-dog
+  composite, with credits. `examples/cats_dogs_gradcam.py upload` attaches them to the image feature
+  as clickable dashboard examples, the new `examples` subcommand attaches them to a model that is
+  already registered, and `explain` prints the summary, the evidence check and the numbered regions
+  and saves the full figure.
+- `examples/cats_dogs_explain.ipynb`: Grad-CAM on a cat and a dog, "why cat?" and "why dog?" with
+  LIME on the cat-and-dog composite, Grad-CAM, occlusion and LIME side by side on the beagle (and
+  why perturbation methods can disagree with Grad-CAM), and a Grad-CAM + LIME gallery of all six
+  photos, with the narrative written from the executed outputs. Figures are inlined as JPEG so the
+  notebook stays small.
+
+### Changed
+
+- `overlay_heatmap(image, heatmap)` keeps its signature but draws the new look (graded glow, focus
+  outline) and gains `method`, `mode`, `threshold` and `outline`; `opacity` is accepted and ignored.
+  `method=None` (the default) infers the upsampling from the values: a map with any negative value
+  is a region map (nearest), anything else Grad-CAM (bilinear). Bytes are rounded half-up
+  (`floor(x · 255 + 0.5)`) so every renderer agrees.
+- The `dev` extra installs matplotlib, so CI runs the `plot_explanation` tests instead of skipping
+  them. matplotlib stays optional for users.
+
 ## 0.4.0 — 2026-10-24
 
 Convolutional image models upload exactly, from PyTorch and Keras, and photos load and explain

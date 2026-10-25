@@ -1,46 +1,65 @@
-"""Train a cats-vs-dogs photo classifier, upload it to Kaimei, and run Grad-CAM on new photos.
+"""Train a cats-vs-dogs photo classifier, upload it to Kaimei, and explain new photos.
 
 The model is torchvision's MobileNetV2, pretrained on ImageNet, with a new one-logit head
 trained on the Oxford-IIIT Pet photos (7,349 photos of 37 breeds: 12 cat, 25 dog). Kaimei
 replays every uploaded layer itself, so Grad-CAM, occlusion and LIME run in the API on any
 photo you send, from Python or from the model's Explain tab on the dashboard.
 
-    pip install "kaimei[images]" torch torchvision
+    pip install "kaimei[images]" matplotlib torch torchvision
     set KAIMEI_API_KEY=km_live_...
     python examples/cats_dogs_gradcam.py train     # downloads the photos (~800 MB) on first run
-    python examples/cats_dogs_gradcam.py upload
-    python examples/cats_dogs_gradcam.py explain my_cat.jpg my_dog.jpg
-    python examples/cats_dogs_gradcam.py explain both.jpg --target cat
+    python examples/cats_dogs_gradcam.py upload    # registers the model with the example photos attached
+    python examples/cats_dogs_gradcam.py examples  # (re)attach the example photos to a registered model
+    python examples/cats_dogs_gradcam.py explain examples/photos/cat_siamese.jpg examples/photos/dog_pug.jpg
+    python examples/cats_dogs_gradcam.py explain examples/photos/cat_and_dog.jpg --target cat --method lime
 
 ``train`` keeps the pretrained convolutional layers frozen and fits the head, which takes a
-few minutes on a laptop CPU. ``explain`` saves ``<photo>_gradcam.png`` (the heatmap painted
-over the photo, as the dashboard shows it) into ``--out``.
+few minutes on a laptop CPU. ``upload`` registers the model and attaches ``examples/photos``
+as clickable example photos of the image feature, so the dashboard's Explain tab works without
+uploading anything. ``explain`` prints the summary sentence, the evidence check and the numbered
+regions (for the class, then against it), and saves ``<photo>_<method>.png`` into ``--out``: the
+dashboard's view, with the heatmap and its numbered badges, the spotlight, the evidence pictures
+and the region chart. The notebook ``examples/cats_dogs_explain.ipynb`` walks through the same
+pictures.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import io
 import json
 import os
 import time
 from pathlib import Path
 
 import numpy as np
-import torch
-import torchvision
-from torch import nn
 
 from kaimei import Kaimei, NotFoundError
-from kaimei.images import image_feature, load_image, overlay_heatmap
+from kaimei.images import (
+    explanation_summary,
+    image_feature,
+    load_image,
+    numbered_regions,
+    plot_explanation,
+)
 
 SIZE = 224
 MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 LABELS = ["cat", "dog"]  # Oxford-IIIT Pet's binary category: 0 = cat, 1 = dog
 WEIGHTS_FILE = "cats_dogs_mobilenet_v2.pt"
+#: Example photos shipped next to this script (Oxford-IIIT Pet test split, see photos/README.md).
+PHOTOS = Path(__file__).resolve().parent / "photos"
+#: Dashboard example size: 224 px JPEGs keep the model record small (~10 KB per photo).
+EXAMPLE_SIZE = 224
+EXAMPLE_QUALITY = 80
 
 
-def build_model(pretrained: bool = True) -> nn.Module:
+def build_model(pretrained: bool = True):
+    import torchvision
+    from torch import nn
+
     weights = torchvision.models.MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None
     net = torchvision.models.mobilenet_v2(weights=weights)
     # One logit: P(dog) = sigmoid(logit). Kaimei appends the sigmoid when the model is uploaded.
@@ -55,6 +74,8 @@ def pets(root: str, split: str, transform=None):
 
 
 def train(args: argparse.Namespace) -> None:
+    import torch
+    from torch import nn
     from torchvision import transforms
 
     normalize = transforms.Normalize(MEAN, STD)
@@ -135,7 +156,41 @@ def client_from_env() -> Kaimei:
     )
 
 
+def example_photos(folder: Path = PHOTOS) -> list:
+    """The shipped photos as image-feature examples: ``{"label", "image": "data:image/jpeg;base64,..."}``.
+
+    The dashboard shows them as clickable thumbnails on the Explain tab. Each is center-cropped to
+    the model's square and re-encoded small, so the model record stays a few dozen kilobytes.
+    """
+    from PIL import Image
+
+    examples = []
+    for path in sorted(folder.glob("*.jpg")):
+        # "cat_british_shorthair" → "Cat · British Shorthair"; "cat_and_dog" → "Cat and dog".
+        species, _, breed = path.stem.partition("_")
+        label = f"{species.title()} · {breed.replace('_', ' ').title()}" if breed != "and_dog" else "Cat and dog"
+        pixels = np.asarray(load_image(path, EXAMPLE_SIZE))
+        buffer = io.BytesIO()
+        Image.fromarray(np.round(pixels * 255).astype(np.uint8)).save(buffer, format="JPEG", quality=EXAMPLE_QUALITY)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        examples.append({"label": label, "image": f"data:image/jpeg;base64,{encoded}"})
+    return examples
+
+
+def with_examples(features: list, examples: list) -> list:
+    """The feature list with ``examples`` attached to its image feature (other features untouched)."""
+    updated = []
+    for feature in features:
+        feature = dict(feature)
+        if feature.get("type") == "image":
+            feature["examples"] = examples
+        updated.append(feature)
+    return updated
+
+
 def upload(args: argparse.Namespace) -> None:
+    import torch
+
     out = Path(args.out)
     net = build_model(pretrained=False)
     net.load_state_dict(torch.load(out / WEIGHTS_FILE, map_location="cpu"))
@@ -158,11 +213,16 @@ def upload(args: argparse.Namespace) -> None:
         X = np.asarray([load_image(test_set[int(i)][0], SIZE) for i in picks])
         y = [LABELS[test_set[int(i)][1]] for i in picks]
 
+    # The image feature, with the example photos attached so the dashboard has something to click.
+    features = [{"name": "photo", "type": "image", "height": SIZE, "width": SIZE, "channels": 3}]
+    if PHOTOS.is_dir():
+        features = with_examples(features, example_photos())
     model = client.models.upload(
         net,
         name="Cats vs dogs (photos)",
         slug=args.slug,
         feature_names=["photo"],
+        features=features,
         task="binary_classification",
         outputs={"labels": LABELS, "positive_label": "dog", "threshold": 0.5},
         input_shape=(3, SIZE, SIZE),
@@ -176,16 +236,35 @@ def upload(args: argparse.Namespace) -> None:
         progress=lambda stage, done, total: print(f"  {stage} {done}/{total}", end="\r"),
     )
     print(f"\nregistered {model.slug} ({model.id})")
-    print("on the dashboard, open the model's Explain tab, upload a photo and pick Grad-CAM")
+    print("on the dashboard, open the model's Explain tab, click an example photo and pick Grad-CAM")
+
+
+def examples(args: argparse.Namespace) -> None:
+    """Attach (or refresh) the example photos on an already-registered model, weights untouched."""
+    client = client_from_env()
+    model = client.models.retrieve(args.model)
+    image_feature(model)  # fails early when the model has no image feature
+    photos = example_photos(Path(args.photos))
+    # to_dict() gives plain dicts (nested values included); dict(APIObject) would keep wrappers.
+    current = [f.to_dict() if hasattr(f, "to_dict") else dict(f) for f in model.features]
+    updated = client.models.update(args.model, features=with_examples(current, photos))
+    print(f"attached {len(photos)} example photos to {updated.slug}: " + ", ".join(p["label"] for p in photos))
 
 
 def explain(args: argparse.Namespace) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")  # files only; no window
+    import matplotlib.pyplot as plt
+
     client = client_from_env()
     model = client.models.retrieve(args.model)
     feature = image_feature(model)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    options = {"target_class": args.target} if args.target else None
+    # A fixed seed makes LIME's random samples, and so its picture, the same on every run (the
+    # notebook uses seed 0 too); Grad-CAM and occlusion are deterministic anyway.
+    options = {"seed": 0, **({"target_class": args.target} if args.target else {})}
     for path in args.photos:
         photo = load_image(path, model=model)
         explanation = client.explanations.create(
@@ -196,11 +275,39 @@ def explain(args: argparse.Namespace) -> None:
         explained = explanation.options.get("target") or output.get("target_label")
         print(
             f"{path}: {output['label']} (P(dog) = {p_dog:.3f}), {args.method} for {explained}"
-            f" on {explanation.options.get('layer', 'patches')}, {explanation.latency_ms or 0:.0f} ms"
+            f" on {explanation.options.get('layer') or explanation.options.get('segmentation', 'patches')},"
+            f" {explanation.n_evals} model calls, {explanation.latency_ms or 0:.0f} ms"
         )
-        target = out / f"{Path(path).stem}_{args.method}{'_' + args.target if args.target else ''}.png"
-        overlay_heatmap(photo, explanation.options["heatmap"], value_range=feature.get("value_range") or (0, 1)).save(target)
-        print(f"  saved {target}")
+        print(f"  {explanation_summary(explanation)}")
+        evidence = explanation.options.get("evidence")
+        if evidence:
+            hidden = "blurred" if evidence.get("fill") == "blur" else "hidden"
+            print(
+                f"  evidence: P({evidence['label']}) = {evidence['full']:.1%} for the photo, "
+                f"{evidence['without_focus']:.1%} with the focus {hidden}, {evidence['focus_only']:.1%} for the focus alone"
+            )
+        print_regions(explanation, explained)
+        stem = f"{Path(path).stem}_{args.method}{'_' + args.target if args.target else ''}"
+        figure = plot_explanation(photo, explanation, feature=feature)
+        figure.savefig(out / f"{stem}.png", dpi=110)
+        plt.close(figure)
+        print(f"  saved {out / f'{stem}.png'}")
+
+
+def print_regions(explanation, target: str) -> None:
+    """The numbered regions as the figure shows them: the strongest for the class, then against it."""
+    areas = {region["name"]: region.get("area") for region in explanation.options.get("regions") or []}
+    units = "mean heat" if explanation.method == "gradcam" else "log-odds"
+    headers = {"for": "strongest regions" if explanation.method == "gradcam" else f"for {target}", "against": f"against {target}"}
+    group = None
+    for item in numbered_regions(explanation):
+        if item["group"] != group:
+            group = item["group"]
+            print(f"  {headers[group]} ({units}):")
+        area = areas.get(item["name"])
+        share = f"  {area * 100:.0f}% of the photo" if area is not None else ""
+        print(f"    {item['number']}  {item['name']:<15} {item['attribution']:+.3f}{share}")
+
 
 
 def main() -> None:
@@ -218,13 +325,16 @@ def main() -> None:
     send.add_argument("--slug", default="cats-dogs-photos")
     send.add_argument("--reference", type=int, default=0, help="held-out photos to upload as reference data")
     send.add_argument("--replace", action="store_true", help="delete an existing model with this slug first")
+    attach = sub.add_parser("examples", help="attach the example photos to a registered model (no re-upload)")
+    attach.add_argument("--model", default="cats-dogs-photos")
+    attach.add_argument("--photos", default=str(PHOTOS), help="folder of JPEGs named <species>_<breed>.jpg")
     ask = sub.add_parser("explain", parents=[common], help="explain new photos with the uploaded model")
     ask.add_argument("photos", nargs="+")
     ask.add_argument("--model", default="cats-dogs-photos")
     ask.add_argument("--method", default="gradcam", choices=["gradcam", "occlusion", "lime"])
     ask.add_argument("--target", choices=LABELS, help="explain this class instead of the predicted one")
     args = parser.parse_args()
-    {"train": train, "upload": upload, "explain": explain}[args.command](args)
+    {"train": train, "upload": upload, "examples": examples, "explain": explain}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -156,19 +156,32 @@ client.explanations.create(model="defect-classifier", input={"image": pixels}, m
 
 `gradcam` reads the last convolutional feature map of an uploaded structure (`options={"layer": ...}` picks another). `occlusion` and `lime` work for any image model, including a remote endpoint; that endpoint receives images as nested lists by default, or as `{"b64": ...}` PNG / float32 with `inference={"image_encoding": "png"}`, channels first with `"image_layout": "chw"`, and normalized with `"image_normalize": {"mean": [...], "std": [...]}`. Requests are split to stay under `max_request_bytes` (8 MB).
 
-To explain a new photo, `kaimei.images` (`pip install "kaimei[images]"`) reads it at the model's input size and paints the result:
+To explain a new photo, `kaimei.images` (`pip install "kaimei[images]"`) reads it at the model's input size and draws the result exactly as the dashboard's Explain tab does:
 
 ```python
-from kaimei.images import load_image, overlay_heatmap
+from kaimei.images import load_image, render_explanation, explanation_summary, plot_explanation
 
 model = client.models.retrieve("cats-dogs-photos")
 photo = load_image("my_dog.jpg", model=model)  # a path, bytes, a PIL image or an array
 explanation = client.explanations.create(model=model.slug, input={"photo": photo}, method="gradcam")
-print(explanation.output["label"], explanation.options["layer"])
-overlay_heatmap(photo, explanation.options["heatmap"]).save("my_dog_gradcam.png")
+print(explanation_summary(explanation))
+# "The model looks mostly at the centre of the photo: half of its evidence for dog sits in 21% of the
+#  picture. That region alone is enough to say dog (P(dog) = 97.5%); with it hidden, P(dog) falls
+#  from 99.2% to 48.1%."
+render_explanation(photo, explanation).save("my_dog_gradcam.png")                   # warm glow + focus outline
+render_explanation(photo, explanation, mode="spotlight").save("my_dog_spotlight.png")  # the photo, dimmed outside the focus
+plot_explanation(photo, explanation)  # matplotlib: the dashboard's view, with numbered regions (below)
 ```
 
-`load_image` scales the shorter side to the model's size and crops the middle, exactly like torchvision's `Resize(n)` + `CenterCrop(n)` (`crop="stretch"` resizes instead), applies the photo's EXIF rotation, and returns pixels in the feature's `value_range`. The dashboard's Explain tab prepares uploaded photos the same way. NumPy arrays can also be passed straight into any request's `input`. [`examples/cats_dogs_gradcam.py`](examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it, and runs Grad-CAM on new photos.
+`load_image` scales the shorter side to the model's size and crops the middle, exactly like torchvision's `Resize(n)` + `CenterCrop(n)` (`crop="stretch"` resizes instead), applies the photo's EXIF rotation, and returns pixels in the feature's `value_range`. The dashboard's Explain tab prepares uploaded photos the same way. NumPy arrays can also be passed straight into any request's `input`.
+
+Heatmaps use the dashboard's palette: amber → orange → red where the photo is evidence *for* the explained class, light blue → indigo where it is evidence *against* it (the SHAP convention), never more than 66% opaque so the eyes and nose under the hot spot stay visible. A white outline marks the focus region, the smallest part of the photo holding half of the evidence. Grad-CAM maps are smoothed; occlusion and LIME keep one flat value per region.
+
+Image explanations carry, besides `options["heatmap"]`, the regions the attributions refer to (`options["regions"]`: superpixels named by position, `upper left`, `centre 3`, …, each with its attribution, area, centroid and an `anchor` point for a number badge; `options["segments"]` maps heatmap cells to regions), the focus region (`options["focus"]`), an evidence check (`options["evidence"]`: P(target) for the full photo, with the focus hidden and with only the focus shown) and a plain-English `options["summary"]`. Photo-sized models hide regions by blurring them (`options["background"] == "blur"`, `evidence["fill"] == "blur"`, with `blur_sigma`), because flat gray is not neutral to a real model; thumbnails under 64 pixels keep gray.
+
+The helpers render all of it with NumPy and Pillow only, byte for byte like the dashboard: `render_explanation(image, explanation, mode=...)`; `overlay_heatmap(image, heatmap, method=..., mode=..., threshold=...)` for raw heatmaps (without `method` it infers one: a map with negative values is a region map, anything else Grad-CAM); `evidence_images(image, explanation)` for the three evidence pictures, blurred with `gaussian_blur` (the API's exact blur) or grayed, as the API did; `numbered_regions(explanation)` for the regions to call out, numbered 1..N: up to five *for* the class, strongest first, then up to three *against* it; `focus_mask` / `region_mask(explanation, "upper left", h, w)` for pixel masks; and the building blocks `upsample_heatmap`, `heat_color`, `heat_alpha` and `focus_threshold`. `plot_explanation` (needs matplotlib) draws the dashboard's view: the photo, the heatmap with those numbers as badges at the regions' anchors, and the spotlight; below, the evidence pictures with their probabilities; on the right, a bar chart of the same numbered regions ("For cat" in orange, "Against cat" in blue; Grad-CAM lists its strongest regions), with the summary as the title. It returns the figure; pass `figure=` (a figure or subfigure) to draw several in one. Regression records print values with three significant figures instead of probabilities. `import kaimei.images` loads neither Pillow nor matplotlib.
+
+[`examples/cats_dogs_gradcam.py`](examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it with the photos in [`examples/photos`](examples/photos) attached as clickable examples, and explains new photos (`explain` prints the summary, the evidence check and the numbered regions, and saves the figure). [`examples/cats_dogs_explain.ipynb`](examples/cats_dogs_explain.ipynb) asks the model *why* on those photos and draws every answer as the dashboard does: Grad-CAM on a cat and a dog, "why cat?" and "why dog?" on the cat-and-dog composite (each question lights up its own animal and marks the other one against), Grad-CAM, occlusion and LIME side by side on the beagle, and a gallery in which Grad-CAM finds the face on every photo while LIME singles out the ears and eyes of the cats and the noses of the dogs.
 
 The JSON spec warns above ~2 MB; lower `externalize_above` if you see it. Each binary tensor may hold up to 250M values (the API's default cap on a single upload is 512 MB compressed).
 
