@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1 — 2026-10-25
+
+### Fixed
+
+- A request that timed out after reaching the server was retried whatever its method. A slow
+  `POST` could therefore run twice or more: a batch of predictions that outlived the timeout was
+  logged four times. Requests are now retried after a network error only when they are safe to
+  repeat (`GET`, `HEAD`, `OPTIONS`) or never reached the server (connection refused or timed out).
+  Otherwise `APIConnectionError` says the request was not retried because the server may already
+  have applied it. Retries after 429, and `GET` retries after 502/503/504, are unchanged.
+
 ## 0.6.0 — 2026-10-25
 
 Tabular explanations and model insights, drawn and worded the way the dashboard shows them.

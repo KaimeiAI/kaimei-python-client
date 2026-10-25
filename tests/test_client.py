@@ -3,7 +3,14 @@ import json
 import httpx
 import pytest
 
-from kaimei import Kaimei, NotFoundError, PermissionDeniedError, PermissionError, __version__
+from kaimei import (
+    APIConnectionError,
+    Kaimei,
+    NotFoundError,
+    PermissionDeniedError,
+    PermissionError,
+    __version__,
+)
 from kaimei._http import Transport
 from kaimei._objects import APIObject
 
@@ -89,7 +96,7 @@ def test_transport_default() -> None:
 
 
 def test_version_is_030() -> None:
-    assert __version__ == "0.6.0"
+    assert __version__ == "0.6.1"
 
 
 def test_permission_denied_alias() -> None:
@@ -125,6 +132,43 @@ def test_retries_on_429() -> None:
     model = client.models.retrieve("ok")
     assert model.id == "mdl_ok"
     assert hits["n"] == 3
+    client.close()
+
+
+def _flaky_client(error: Exception, hits: dict) -> Kaimei:
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+        if hits["n"] == 1:
+            raise error
+        return httpx.Response(200, json={"object": "list", "data": [], "count": 0})
+
+    client = Kaimei(api_key="km_test_x", base_url="https://api.kaimei.ai", max_retries=3)
+    client._transport._client = httpx.Client(base_url="https://api.kaimei.ai", transport=httpx.MockTransport(handler))
+    return client
+
+
+def test_a_post_that_timed_out_is_not_sent_again() -> None:
+    """Regression: a slow batch POST timed out client-side and was resent three times; all four
+    copies were logged."""
+    hits = {"n": 0}
+    client = _flaky_client(httpx.ReadTimeout("slow"), hits)
+    with pytest.raises(APIConnectionError, match="not retried"):
+        client.predictions.create_batch(model="m", items=[{"input": {"x": 1}}])
+    assert hits["n"] == 1
+    client.close()
+
+
+def test_requests_that_never_left_or_are_safe_to_repeat_are_retried() -> None:
+    hits = {"n": 0}
+    client = _flaky_client(httpx.ConnectError("refused"), hits)
+    client.predictions.create_batch(model="m", items=[{"input": {"x": 1}}])
+    assert hits["n"] == 2
+    client.close()
+
+    hits = {"n": 0}
+    client = _flaky_client(httpx.ReadTimeout("slow"), hits)
+    client.models.list()
+    assert hits["n"] == 2
     client.close()
 
 

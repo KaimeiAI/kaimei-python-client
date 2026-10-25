@@ -15,6 +15,8 @@ DEFAULT_BASE_URL = "https://api.kaimei.ai"
 DEFAULT_TIMEOUT = 120.0
 RETRYABLE_STATUS: Set[int] = {429, 502, 503, 504}
 IDEMPOTENT_METHODS = {"GET", "HEAD", "OPTIONS"}
+#: Failures that happen before a request reaches the server, so any method can be retried.
+NOT_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 
 class Transport:
@@ -79,6 +81,14 @@ class Transport:
                 )
             except httpx.HTTPError as exc:
                 last_error = exc
+                # A POST that timed out may still be running on the server; sending it again would
+                # apply it twice (a batch of predictions logged four times). Retry only requests that
+                # are safe to repeat, or that never reached the server.
+                if not (verb in IDEMPOTENT_METHODS or isinstance(exc, NOT_SENT_ERRORS)):
+                    raise APIConnectionError(
+                        f"No response from Kaimei at {self.base_url}: {exc}. The {verb} was not retried "
+                        "because the server may already have applied it."
+                    ) from exc
                 if attempt >= self.max_retries:
                     raise APIConnectionError(f"Could not reach Kaimei at {self.base_url}: {exc}") from exc
                 time.sleep(_backoff(attempt))
