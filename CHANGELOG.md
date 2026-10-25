@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.0 — 2026-10-25
+
+Tabular explanations and model insights, drawn and worded the way the dashboard shows them.
+
+### Added
+
+- `kaimei.tabular`, for models whose inputs are table rows:
+  - `explanation_summary(explanation, model=None)` states the prediction against the model's average
+    and names the inputs that moved it most, in percentage points of `P(target)` for classifiers and
+    in output units for regressions.
+  - `plot_explanation(explanation, model=None, max_features=10)` draws a waterfall from the average
+    prediction (the base value) to this one. Bars push toward the explained class (blue) or away
+    (pink); the smallest attributions fold into one row; a hairline marks a binary model's threshold.
+  - `counterfactual_summary` and `plot_counterfactual` show the counterfactual search step by step:
+    the changes it made, the prediction after each, and whether the decision flipped. Requires an
+    explanation created with `options={"counterfactual": True}`.
+  - `compare_explanations([e1, e2], ["Model A", "Model B"])` puts one input's attributions from up
+    to three models side by side.
+  - `plot_insight(insight)` / `plot_insights(page)` draw every insight type an analysis produces:
+    - importance, interactions and robustness as ranked bars;
+    - behaviour curves as small multiples with individual-row curves;
+    - the prediction histogram around the threshold;
+    - drift, with PSI coloured by status and labelled in words;
+    - the learned rules.
+  - Passing `model=` (from `client.models.retrieve`) adds feature units (`Age = 22 years`) and names
+    the output (`P(survived)`).
+  - The text helpers need only the client. The plots need matplotlib, which `import kaimei.tabular`
+    does not load.
+
+### Changed
+
+- A nested object without an `object` type, such as `explanation.output` or an item of
+  `explanation.top_features`, now prints as its data instead of `<Kaimei object ...>`.
+
 ## 0.5.0 — 2026-10-25
 
 Image explanations are drawn the way the dashboard draws them, and read like a sentence.

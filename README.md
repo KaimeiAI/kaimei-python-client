@@ -127,6 +127,36 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](examples/upload_s
 
 Unknown Keras / PyTorch layers that keep their input's shape are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL. Operations that change the shape and cannot be replayed (for example ShuffleNet's channel shuffle or an upsampling decoder) raise `StructureError(code="unsupported_layers")` naming them; register such models with a remote inference URL instead.
 
+### Tabular explanations in a notebook
+
+`kaimei.tabular` turns explanations and insights into sentences and charts in the dashboard's colours (`pip install matplotlib` for the charts):
+
+```python
+from kaimei.tabular import (
+    compare_explanations, counterfactual_summary, explanation_summary,
+    plot_counterfactual, plot_explanation, plot_insight,
+)
+
+model = client.models.retrieve("titanic-forest")
+explanation = client.explanations.create(
+    model=model.slug, input=passenger, method="shap",
+    options={"counterfactual": True, "frozen_features": ["Sex", "Age"]},
+)
+print(explanation_summary(explanation, model=model))
+# The model predicts died: P(survived) = 7.4%, against 41.1% on average over the reference data.
+# Pulling P(survived) down: Sex = male (−12.1 pts), Title = Mr (−11.0 pts), Pclass = 3 (−4.5 pts).
+plot_explanation(explanation, model=model)     # waterfall from the average to this prediction
+print(counterfactual_summary(explanation, model=model))
+plot_counterfactual(explanation, model=model)  # the smallest change that flips the decision, step by step
+compare_explanations([explanation, other_model_explanation], ["Forest", "Logistic"], model=model)
+for insight in client.insights.list(model=model.slug).data:
+    plot_insight(insight, model=model)         # importance, rules, behaviour curves, interactions, drift, ...
+```
+
+The examples above come from [titanic-kaimei-example](https://github.com/KaimeiAI/titanic-kaimei-example). Passing `model=` adds feature units (`Fare = 7.25 GBP`) and names the output (`P(survived)`).
+
+For a model Kaimei runs itself with up to 12 inputs, KernelSHAP enumerates every feature coalition over a fixed reference sample. The answer is therefore exact for that sample, and the same request returns the same numbers.
+
 ### Image models
 
 Images travel as nested `height × width × channels` lists, channels last, with pixels in `[0, 1]` unless the feature says otherwise. A PyTorch CNN needs its input size (PyTorch order); a Keras model reports its own.

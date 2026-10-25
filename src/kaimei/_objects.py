@@ -44,7 +44,10 @@ class APIObject(Mapping[str, Any]):
         return default
 
     def __repr__(self) -> str:
-        kind = self._data.get("object") or "object"
+        kind = self._data.get("object")
+        if not kind:
+            # A nested value such as ``explanation.output``: show the data itself.
+            return repr(self._data)
         ident = self._data.get("id") or self._data.get("slug") or self._data.get("name")
         if ident:
             return f"<Kaimei {kind} {ident}>"
