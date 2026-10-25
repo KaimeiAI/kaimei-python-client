@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.2 — 2026-10-25
+
+### Fixed
+
+- `kaimei.tabular.plot_insight` on a drift insight: the "moderate" and "significant" labels of the
+  PSI reference lines overlapped when one input had drifted far (the lines sit close together on a
+  wide axis). Each label now sits on the outer side of its line.
+- `plot_explanation` for regression-style outputs (for example TreeSHAP values in log-odds) labels
+  every bar with one shared precision, three significant figures of the largest, so a tiny
+  attribution reads `+0.00` rather than `+0.000554`.
+
 ## 0.6.1 — 2026-10-25
 
 ### Fixed

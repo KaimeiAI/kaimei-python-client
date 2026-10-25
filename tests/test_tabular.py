@@ -229,3 +229,25 @@ def test_nested_objects_print_their_data():
     record = _explanation()
     assert repr(record) == "<Kaimei explanation expl_1>"
     assert repr(record.output).startswith("{'label': 'died'")
+
+
+def test_regression_waterfall_labels_share_one_precision():
+    plt = pytest.importorskip("matplotlib.pyplot")
+    record = _explanation(
+        output={"value": -3.3, "name": "log-odds of survived", "unit": "log-odds"},
+        attributions={"Sex": -1.25, "Fare": -0.621, "Parch": 0.000554},
+        input={"Sex": "male", "Fare": 7.25, "Parch": 0},
+        base_value=-1.4286,
+    )
+    fig = plot_explanation(record)
+    labels = [t.get_text() for t in fig.axes[0].texts]
+    assert "−1.25" in labels and "−0.62" in labels and "+0.00" in labels
+    plt.close(fig)
+
+
+def test_drift_threshold_labels_sit_on_either_side_of_their_lines():
+    plt = pytest.importorskip("matplotlib.pyplot")
+    fig = plot_insight(INSIGHTS[0])
+    labels = {t.get_text().strip(): t.get_horizontalalignment() for t in fig.axes[0].texts}
+    assert labels["moderate"] == "right" and labels["significant"] == "left"
+    plt.close(fig)

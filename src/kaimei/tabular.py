@@ -232,10 +232,12 @@ def plot_explanation(
             lo, hi = max(0.0, lo - 0.025), min(1.0, hi + 0.025)
     ax.set_xlim(lo, hi)
     offset = 0.012 * (hi - lo)
+    # Regression labels share one precision, so a tiny attribution reads +0.00, not +0.000554.
+    decimals = None if classification else _shared_decimals(a for _, a in rows)
     running = base
     for index, (_, a) in enumerate(rows, start=1):
         right_end = max(running, running + a)
-        ax.text(right_end + offset, index, _delta(a, classification), va="center", ha="left", fontsize=9,
+        ax.text(right_end + offset, index, _delta(a, classification, decimals), va="center", ha="left", fontsize=9,
                 color=_MUTED)
         running += a
     ax.text(base + offset * 1.6, 0, _out(base, classification), va="center", ha="left", fontsize=9.5, color=_INK)
@@ -567,9 +569,10 @@ def _plot_drift(insight: Any, *, model: Any, max_items: int, ice: bool) -> Any:
     for index, (value, status) in enumerate(zip(psi, statuses)):
         ax.barh(index, value, height=0.62, color=STATUS.get(status, SERIES[0]), linewidth=0, zorder=3)
     high = max(psi + [0.27])
-    for line, word in ((0.1, "moderate"), (0.25, "significant")):
+    # "moderate" ends at its line and "significant" starts at its own, so they never overlap.
+    for line, word, align in ((0.1, "moderate ", "right"), (0.25, " significant", "left")):
         ax.axvline(line, color=_FAINT, linewidth=0.8, zorder=1)
-        ax.text(line, -0.75, word, ha="center", va="bottom", fontsize=8, color=_MUTED)
+        ax.text(line, -0.75, word, ha=align, va="bottom", fontsize=8, color=_MUTED)
     ax.set_xlim(0, high * 1.22)
     for index, (value, status) in enumerate(zip(psi, statuses)):
         ax.text(value + high * 0.015, index, f"{value:.3f} · {status}", va="center", fontsize=8.5,
@@ -902,11 +905,21 @@ def _out(value: Any, classification: bool) -> str:
     return _pct(value) if classification else _num(value)
 
 
-def _delta(value: float, classification: bool) -> str:
+def _delta(value: float, classification: bool, decimals: Optional[int] = None) -> str:
     sign = "+" if value >= 0 else _MINUS
     if classification:
         return f"{sign}{abs(value) * 100:.1f} pts"
+    if decimals is not None:
+        return f"{sign}{abs(value):.{decimals}f}"
     return f"{sign}{_num(abs(value))}"
+
+
+def _shared_decimals(values: Iterable[float]) -> Optional[int]:
+    """Decimals that give the largest value three significant figures, for a column of labels."""
+    largest = max((abs(v) for v in values), default=0.0)
+    if largest == 0:
+        return None
+    return max(0, 2 - int(math.floor(math.log10(largest))))
 
 
 def _unit_suffix(unit: Any, brackets: bool = False) -> str:
