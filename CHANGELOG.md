@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.3 — 2026-10-25
+
+### Fixed
+
+- `kaimei.tabular` chart titles use bold, which every matplotlib install has. Newer matplotlib
+  logged `findfont: Failed to find font weight semibold for DejaVu Sans` under each chart.
+
+### Documentation
+
+- README: an Examples section (the [Titanic example](https://github.com/KaimeiAI/titanic-kaimei-example), the scikit-learn and image examples); links to [kaimei.ai](https://kaimei.ai) and the [API reference](https://api.kaimei.ai/docs) instead of a repository that isn't public.
+- Package metadata: the "API" link points at the public API reference, plus an "Examples" link.
+
 ## 0.6.2 — 2026-10-25
 
 ### Fixed

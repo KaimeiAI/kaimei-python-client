@@ -192,6 +192,8 @@ def test_every_insight_type_draws(insight):
     plt = pytest.importorskip("matplotlib.pyplot")
     fig = plot_insight(insight, model=MODEL)
     assert fig.texts[0].get_text() == insight.title
+    # DejaVu Sans, matplotlib's default font, has no semibold: newer matplotlib logged a warning.
+    assert fig.texts[0].get_fontweight() in ("bold", 700)
     assert all("`" not in t.get_text() for t in fig.texts)
     # IPython silently skips a figure without axes, so even the text-only cards need one.
     assert fig.axes

@@ -28,7 +28,7 @@ print(explanation.top_features)
 # 0.81 decline  |  credit_score -0.22
 ```
 
-The same call as `POST https://api.kaimei.ai/v1/explanations`. See the [product site](https://kaimeiai-website.pages.dev/) for the language-agnostic REST examples.
+The same call as `POST https://api.kaimei.ai/v1/explanations`. See [kaimei.ai](https://kaimei.ai) for the language-agnostic REST examples and the [API reference](https://api.kaimei.ai/docs) for every endpoint.
 
 ## Install
 
@@ -42,7 +42,7 @@ To extract and upload a fitted estimator you also need NumPy (and your training 
 pip install "kaimei[models]"
 ```
 
-For a local API (the `kaimei-api` service in the [KaimeiAI/kaimei](https://github.com/KaimeiAI/kaimei) repo):
+For a self-hosted or local Kaimei API, pass its address:
 
 ```python
 client = Kaimei(api_key="km_test_...", base_url="http://localhost:8000")
@@ -51,6 +51,18 @@ client = Kaimei(api_key="km_test_...", base_url="http://localhost:8000")
 `KAIMEI_API_KEY` and `KAIMEI_BASE_URL` are read from the environment when arguments are omitted.
 
 Create an API key in the [dashboard](https://dashboard.kaimei.ai) (session login). Keys cannot create other keys.
+
+## Examples
+
+- **[titanic-kaimei-example](https://github.com/KaimeiAI/titanic-kaimei-example)**: a complete workflow on the Titanic data, in five notebooks with their outputs (and Colab badges):
+  - upload a scikit-learn model;
+  - explain passengers, with counterfactuals and two models compared;
+  - analyse the whole model;
+  - monitor production traffic and catch drift;
+  - ship an improved version;
+  - explain a model Kaimei can't run itself: XGBoost, via TreeSHAP values and via a scoring endpoint.
+- [`examples/upload_sklearn.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/upload_sklearn.py) / [`.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/upload_sklearn.ipynb): the smallest upload-and-explain round trip.
+- [`examples/cats_dogs_gradcam.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_gradcam.py) and [`cats_dogs_explain.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_explain.ipynb): an image model (MobileNetV2) explained with Grad-CAM, occlusion and LIME.
 
 ## Upload a trained model from a notebook
 
@@ -107,7 +119,7 @@ Options:
 - `extract_structure(estimator, ...)` returns the spec and the tensors without uploading, for inspection or a custom upload.
 - `client.models.tensors(model)` lists what was uploaded; `structure_parameter_values(model, "fc1.weight")` reads a tensor back as float32.
 
-A runnable walkthrough lives in [`examples/upload_sklearn.py`](examples/upload_sklearn.py) and [`examples/upload_sklearn.ipynb`](examples/upload_sklearn.ipynb).
+A runnable walkthrough lives in [`examples/upload_sklearn.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/upload_sklearn.py) and [`examples/upload_sklearn.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/upload_sklearn.ipynb).
 
 ### Supported estimators
 
@@ -211,7 +223,7 @@ Image explanations carry, besides `options["heatmap"]`, the regions the attribut
 
 The helpers render all of it with NumPy and Pillow only, byte for byte like the dashboard: `render_explanation(image, explanation, mode=...)`; `overlay_heatmap(image, heatmap, method=..., mode=..., threshold=...)` for raw heatmaps (without `method` it infers one: a map with negative values is a region map, anything else Grad-CAM); `evidence_images(image, explanation)` for the three evidence pictures, blurred with `gaussian_blur` (the API's exact blur) or grayed, as the API did; `numbered_regions(explanation)` for the regions to call out, numbered 1..N: up to five *for* the class, strongest first, then up to three *against* it; `focus_mask` / `region_mask(explanation, "upper left", h, w)` for pixel masks; and the building blocks `upsample_heatmap`, `heat_color`, `heat_alpha` and `focus_threshold`. `plot_explanation` (needs matplotlib) draws the dashboard's view: the photo, the heatmap with those numbers as badges at the regions' anchors, and the spotlight; below, the evidence pictures with their probabilities; on the right, a bar chart of the same numbered regions ("For cat" in orange, "Against cat" in blue; Grad-CAM lists its strongest regions), with the summary as the title. It returns the figure; pass `figure=` (a figure or subfigure) to draw several in one. Regression records print values with three significant figures instead of probabilities. `import kaimei.images` loads neither Pillow nor matplotlib.
 
-[`examples/cats_dogs_gradcam.py`](examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it with the photos in [`examples/photos`](examples/photos) attached as clickable examples, and explains new photos (`explain` prints the summary, the evidence check and the numbered regions, and saves the figure). [`examples/cats_dogs_explain.ipynb`](examples/cats_dogs_explain.ipynb) asks the model *why* on those photos and draws every answer as the dashboard does: Grad-CAM on a cat and a dog, "why cat?" and "why dog?" on the cat-and-dog composite (each question lights up its own animal and marks the other one against), Grad-CAM, occlusion and LIME side by side on the beagle, and a gallery in which Grad-CAM finds the face on every photo while LIME singles out the ears and eyes of the cats and the noses of the dogs.
+[`examples/cats_dogs_gradcam.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it with the photos in [`examples/photos`](https://github.com/KaimeiAI/kaimei-python-client/tree/main/examples/photos) attached as clickable examples, and explains new photos (`explain` prints the summary, the evidence check and the numbered regions, and saves the figure). [`examples/cats_dogs_explain.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_explain.ipynb) asks the model *why* on those photos and draws every answer as the dashboard does: Grad-CAM on a cat and a dog, "why cat?" and "why dog?" on the cat-and-dog composite (each question lights up its own animal and marks the other one against), Grad-CAM, occlusion and LIME side by side on the beagle, and a gallery in which Grad-CAM finds the face on every photo while LIME singles out the ears and eyes of the cats and the noses of the dogs.
 
 The JSON spec warns above ~2 MB; lower `externalize_above` if you see it. Each binary tensor may hold up to 250M values (the API's default cap on a single upload is 512 MB compressed).
 

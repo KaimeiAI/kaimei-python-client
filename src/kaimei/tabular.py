@@ -635,7 +635,7 @@ def _header(fig: Any, width: float, title: str, subtitle: str) -> float:
     lines = textwrap.wrap(subtitle, _chars(width - 0.5, _SUBTITLE_SIZE)) if subtitle else []
     used = 0.18
     heading = fig.text(0.22 / width, 1 - used / height, title, ha="left", va="top", fontsize=_TITLE_SIZE,
-                       color=_INK, fontweight="semibold")
+                       color=_INK, fontweight="bold")
     heading._kaimei_header = True
     used += 0.3
     if lines:
