@@ -335,6 +335,11 @@ def duration_between(start: Any, end: Any) -> str:
     return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60}s"
 
 
+def _map(value: Any) -> Mapping[str, Any]:
+    """``value`` when it is a mapping, else an empty one."""
+    return value if isinstance(value, Mapping) else {}
+
+
 def _float(value: Any) -> Optional[float]:
     if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -560,12 +565,12 @@ def render(data: Mapping[str, Any]) -> str:
 
 
 def _explanation(data: Mapping[str, Any]) -> str:
-    output = data.get("output") if isinstance(data.get("output"), Mapping) else {}
+    output = _map(data.get("output"))
     main, sub = output_parts(output)
     label = output.get("label")
     target = output.get("target_label")
     classification = isinstance(label, str) or bool(output.get("probabilities"))
-    inputs = data.get("input") if isinstance(data.get("input"), Mapping) else {}
+    inputs = _map(data.get("input"))
     image_key = _image_key(inputs)
     method = str(data.get("method") or "")
 
@@ -643,7 +648,7 @@ def _attribution_rows(data: Mapping[str, Any], inputs: Mapping[str, Any]) -> Lis
             value = _float(feature.get("mean_attribution")) or _float(feature.get("mean_abs_attribution")) or 0.0
         rows.append((name, _bar_input(feature.get("value", inputs.get(name))), value))
         seen.add(name)
-    attributions = data.get("attributions") if isinstance(data.get("attributions"), Mapping) else {}
+    attributions = _map(data.get("attributions"))
     rest = [(str(k), _float(v) or 0.0) for k, v in attributions.items() if str(k) not in seen]
     rest.sort(key=lambda kv: -abs(kv[1]))
     rows.extend((name, _bar_input(inputs.get(name)), value) for name, value in rest)
@@ -692,7 +697,7 @@ def _counterfactual(cf: Mapping[str, Any], classification: bool) -> str:
     if before is not None and after is not None:
         shown = (pct(before, 1), pct(after, 1)) if classification else (fmt_number(before, 3), fmt_number(after, 3))
         lines.append(f'<span class="km-faint">Output {shown[0]} → {shown[1]}</span>')
-    goal = cf.get("target") if isinstance(cf.get("target"), Mapping) else {}
+    goal = _map(cf.get("target"))
     if goal.get("kind") == "flip_decision" and goal.get("threshold") is not None:
         lines.append(f'<span class="km-faint">Decision threshold {pct(goal["threshold"], 1) if classification else fmt_number(goal["threshold"], 3)}</span>')
     elif goal.get("kind") == "reach_value" and goal.get("target_value") is not None:
@@ -714,22 +719,18 @@ def _image_key(inputs: Mapping[str, Any]) -> Optional[str]:
 
 
 def _image_section(data: Mapping[str, Any], key: str, target: Any) -> str:
+    from . import images
+
     out = []
     try:
-        from . import images
-    except Exception:  # pragma: no cover
-        images = None
-    summary = ""
-    if images is not None:
-        try:
-            summary = images.explanation_summary(data)
-        except Exception:
-            summary = str((data.get("options") or {}).get("summary") or "")
+        summary = images.explanation_summary(data)
+    except Exception:
+        summary = str(_map(data.get("options")).get("summary") or "")
     if summary:
         out.append(f'<div class="km-lead">{_e(summary)}</div>')
     out.append(_image_panels(data, key))
-    options = data.get("options") if isinstance(data.get("options"), Mapping) else {}
-    evidence = options.get("evidence") if isinstance(options.get("evidence"), Mapping) else None
+    options = _map(data.get("options"))
+    evidence = _map(options.get("evidence"))
     if evidence:
         who = evidence.get("label") or target or "the class"
         chips = [
@@ -739,11 +740,10 @@ def _image_section(data: Mapping[str, Any], key: str, target: Any) -> str:
         ]
         out.append(_badges(chips))
     regions: List[Dict[str, Any]] = []
-    if images is not None:
-        try:
-            regions = images.numbered_regions(data)
-        except Exception:
-            regions = []
+    try:
+        regions = images.numbered_regions(data)
+    except Exception:
+        regions = []
     if regions:
         rows = [
             (f"{r['number']} · {r['name']}", float(r["attribution"]), fmt_signed(r["attribution"]), "for" if r["group"] == "for" else "against")
@@ -754,7 +754,7 @@ def _image_section(data: Mapping[str, Any], key: str, target: Any) -> str:
         out.append('<div class="km-h">Regions</div>')
         out.append(_share_bars(rows, legend=legend))
     else:
-        attributions = data.get("attributions") if isinstance(data.get("attributions"), Mapping) else {}
+        attributions = _map(data.get("attributions"))
         rows = [(str(k), _float(v) or 0.0, fmt_signed(v), "for" if (_float(v) or 0.0) >= 0 else "against") for k, v in attributions.items()]
         if rows:
             out.append('<div class="km-h">Regions</div>')
@@ -780,7 +780,7 @@ def _image_panels(data: Mapping[str, Any], key: str) -> str:
             pixelated = max(picture.size) < 96
             if pixelated:
                 scale = max(1, 128 // max(picture.size))
-                picture = picture.resize((picture.width * scale, picture.height * scale), Image.NEAREST)
+                picture = picture.resize((picture.width * scale, picture.height * scale), getattr(Image, "Resampling", Image).NEAREST)
             else:
                 picture.thumbnail((176, 176))
             buffer = io.BytesIO()
@@ -797,7 +797,7 @@ def _image_panels(data: Mapping[str, Any], key: str) -> str:
 
 def _insight(data: Mapping[str, Any]) -> str:
     kind = str(data.get("type") or "")
-    payload = data.get("payload") if isinstance(data.get("payload"), Mapping) else {}
+    payload = _map(data.get("payload"))
     severity = str(data.get("severity") or "")
     out = [_head("Insight", data.get("id"), _when(data))]
     out.append(f'<div class="km-result"><span class="km-title">{_e(data.get("title") or title_case(kind))}</span></div>')
@@ -861,10 +861,10 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
     if kind == "interactions":
         rows = []
         for pair in _dicts(payload.get("pairs")):
-            features = [str(f) for f in (pair.get("features") or [])]
-            if len(features) == 2:
+            pair_names = [str(f) for f in (pair.get("features") or [])]
+            if len(pair_names) == 2:
                 strength = _float(pair.get("strength")) or 0.0
-                rows.append((f"{features[0]} × {features[1]}", strength, f"{strength * 100:.0f}%", "share"))
+                rows.append((f"{pair_names[0]} × {pair_names[1]}", strength, f"{strength * 100:.0f}%", "share"))
         return _share_bars(rows[:limit])
     if kind == "learned_rules":
         statements = [str(r.get("statement") or "").replace("`", "") for r in _dicts(payload.get("rules"))]
@@ -892,7 +892,7 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
             )
         return f'<div class="km-curves">{"".join(cards)}</div>' if cards else ""
     if kind in ("behavior", "behaviour"):
-        histogram = payload.get("histogram") if isinstance(payload.get("histogram"), Mapping) else {}
+        histogram = _map(payload.get("histogram"))
         counts = [c for c in (_float(x) for x in (histogram.get("counts") or [])) if c is not None]
         edges = [e for e in (_float(x) for x in (histogram.get("edges") or [])) if e is not None]
         threshold = _float(payload.get("threshold"))
@@ -961,7 +961,7 @@ def _model(data: Mapping[str, Any]) -> str:
         ("Last analyzed", _date_cell(data.get("last_analyzed_at")) if data.get("last_analyzed_at") else "never", ""),
     ]
     out.append(_tiles(tiles))
-    outputs = data.get("outputs") if isinstance(data.get("outputs"), Mapping) else {}
+    outputs = _map(data.get("outputs"))
     chips = []
     labels = outputs.get("labels")
     if isinstance(labels, (list, tuple)) and labels:
@@ -976,7 +976,7 @@ def _model(data: Mapping[str, Any]) -> str:
     methods = data.get("explain_methods")
     if isinstance(methods, (list, tuple)) and methods:
         chips.append(_badge("explains with " + ", ".join(METHOD_LABEL.get(str(m), str(m)) for m in methods)))
-    inference = data.get("inference") if isinstance(data.get("inference"), Mapping) else {}
+    inference = _map(data.get("inference"))
     if inference.get("type"):
         chips.append(_badge(f"inference {inference['type']}", mono=True))
     if chips:
@@ -1018,7 +1018,7 @@ def _model(data: Mapping[str, Any]) -> str:
 
 
 def _prediction(data: Mapping[str, Any]) -> str:
-    output = data.get("output") if isinstance(data.get("output"), Mapping) else {}
+    output = _map(data.get("output"))
     main, sub = output_parts(output)
     label = output.get("label")
     out = [_head("Prediction", data.get("id"), _when(data))]
@@ -1042,7 +1042,7 @@ def _prediction(data: Mapping[str, Any]) -> str:
                 for name, value in ranked
             )
         )
-    inputs = data.get("input") if isinstance(data.get("input"), Mapping) else {}
+    inputs = _map(data.get("input"))
     if inputs:
         out.append(_details("Input", _kv_table((k, _e(_input_text(v))) for k, v in inputs.items()), open_=len(inputs) <= 12, note=f"{len(inputs)} features"))
     out.append(_details("JSON", _json_block(data), note="arrays elided; to_json() has everything"))
@@ -1063,9 +1063,10 @@ def _analysis(data: Mapping[str, Any]) -> str:
     if progress is not None and status in ("queued", "running"):
         share = progress if progress <= 1 else progress / 100
         out.append(f'<div class="km-meter" title="{pct(share, 0)}"><i style="width:{max(min(share, 1), 0) * 100:.1f}%"></i></div><div class="km-faint" style="margin:4px 0 10px">{pct(share, 0)} done</div>')
-    insight_ids = data.get("insight_ids") if isinstance(data.get("insight_ids"), (list, tuple)) else []
+    insight_ids = data.get("insight_ids")
+    insight_count = len(insight_ids) if isinstance(insight_ids, (list, tuple)) else 0
     tiles = [
-        ("Insights", str(len(insight_ids)), ""),
+        ("Insights", str(insight_count), ""),
         ("Model calls", compact(data.get("n_evals") or 0), ""),
         ("Started", _date_cell(data.get("started_at")), ""),
         ("Finished", _date_cell(data.get("completed_at")), duration_between(data.get("started_at"), data.get("completed_at")) if data.get("completed_at") else ""),
@@ -1073,7 +1074,7 @@ def _analysis(data: Mapping[str, Any]) -> str:
     out.append(_tiles(tiles))
     if data.get("error"):
         out.append(f'<div class="km-error">{_e(data["error"])}</div>')
-    options = data.get("options") if isinstance(data.get("options"), Mapping) else {}
+    options = _map(data.get("options"))
     if options:
         out.append(_details("Options", _json_block(options)))
     if insight_ids:
@@ -1167,7 +1168,7 @@ def _page_table(kind: str, items: Sequence[Mapping[str, Any]]) -> str:
         rows = []
         for p in items:
             main, sub = output_parts(p.get("output"))
-            inputs = p.get("input") if isinstance(p.get("input"), Mapping) else {}
+            inputs = _map(p.get("input"))
             summary = "  ".join(f"{k}={_input_text(v)}" for k, v in list(inputs.items())[:6])
             rows.append(
                 [
