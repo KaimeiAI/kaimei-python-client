@@ -14,7 +14,12 @@ def wrap(value: Any) -> Any:
 
 
 class APIObject(Mapping[str, Any]):
-    """A JSON object you can read as ``obj.top_features`` or ``obj["top_features"]``."""
+    """A JSON object you can read as ``obj.top_features`` or ``obj["top_features"]``.
+
+    In a notebook, a record (an object with an ``object`` type) displays as a Kaimei card; see
+    :mod:`kaimei.display` for the raw alternatives (``to_dict``, ``to_json``, ``to_frame`` and
+    ``kaimei.set_display("raw")``).
+    """
 
     _data: Dict[str, Any]
 
@@ -24,7 +29,34 @@ class APIObject(Mapping[str, Any]):
             object.__setattr__(self, key, wrap(value))
 
     def to_dict(self) -> Dict[str, Any]:
+        """The JSON the API returned, as a plain dict (nested values are plain dicts and lists)."""
         return dict(self._data)
+
+    def to_json(self, indent: Optional[int] = 2, **kwargs: Any) -> str:
+        """The JSON the API returned, as a string (``json.dumps`` keyword arguments pass through)."""
+        import json
+
+        kwargs.setdefault("default", str)
+        kwargs.setdefault("ensure_ascii", False)
+        return json.dumps(self._data, indent=indent, **kwargs)
+
+    def to_frame(self) -> Any:
+        """This record's main table as a pandas DataFrame.
+
+        An explanation gives one row per feature (``rank``, ``feature``, ``value``,
+        ``attribution``, ``share``, ``direction``: the dashboard's numbers), an insight the table of
+        its payload, a model its features, a page one row per item; anything else is one flattened
+        row. See :func:`kaimei.display.rows` for the exact shapes. Needs pandas.
+        """
+        from .display import frame
+
+        return frame(self)
+
+    def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> Any:
+        """What a notebook shows: the themed card, or the JSON when ``kaimei.set_display("raw")``."""
+        from .display import mimebundle
+
+        return mimebundle(self)
 
     def __getitem__(self, key: str) -> Any:
         return wrap(self._data[key])

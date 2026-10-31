@@ -139,6 +139,41 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](https://github.co
 
 Unknown Keras / PyTorch layers that keep their input's shape are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL. Operations that change the shape and cannot be replayed (for example ShuffleNet's channel shuffle or an upsampling decoder) raise `StructureError(code="unsupported_layers")` naming them; register such models with a remote inference URL instead.
 
+### Results in a notebook
+
+A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an analysis, or a page of them) shows as a Kaimei card: the mark, the dashboard's colours and the dashboard's numbers, formatted by the same rules. An explanation card has the prediction, the attribution bars (hover a bar for its full precision), the probabilities, the counterfactual, and the input and JSON behind collapsible sections; an image explanation adds the photo, the evidence heatmap and the focus, with its regions. Insight cards draw importance shares, drift by status, behaviour curves, the output histogram and the learned rules the way the dashboard's cards do. The cards are plain HTML and CSS, so they render in JupyterLab, classic Jupyter, VS Code and Colab, follow the host's dark theme, and link back to the record in the dashboard.
+
+```python
+explanation = client.explanations.create(model="titanic-forest", input=passenger, method="shap")
+explanation            # the card
+```
+
+For the plain data instead:
+
+```python
+explanation.to_dict()  # the JSON the API returned, as a dict
+explanation.to_json()  # the same, as a string
+explanation.to_frame() # the dashboard's table as a pandas DataFrame
+#    rank feature value  attribution   share direction
+# 0     1     Sex  male       -0.091  0.5112  negative
+# 1     2  Pclass     3       -0.042  0.2360  negative
+# ...
+```
+
+`to_frame()` gives the record's main table: one row per feature for an explanation (the API's `top_features` rows as sent, then the remaining `attributions` with `share` and `rank` by the same formula; an image explanation lists its regions), the payload's table for an insight (importance shares, PSI per feature, interaction pairs, fragile features, rules, one row per grid point of each behaviour curve, histogram bins), the features of a model, and one flattened row per item for a page (`output.label`, `attributions.Age`, ...). `kaimei.display.rows(record)` is the same without pandas.
+
+If you never want the cards:
+
+```python
+import kaimei
+kaimei.set_display("raw")     # cells show the JSON (a collapsible tree in JupyterLab); "rich" restores the cards
+
+with kaimei.display.using("raw"):
+    explanation               # raw for this block only
+```
+
+`KAIMEI_DISPLAY=raw` in the environment sets the default, `kaimei.display.html(record)` returns a card's HTML for a report of your own, and `KAIMEI_DASHBOARD_URL` points the cards' links at a self-hosted dashboard.
+
 ### Tabular explanations in a notebook
 
 `kaimei.tabular` turns explanations and insights into sentences and charts in the dashboard's colours (`pip install matplotlib` for the charts):
