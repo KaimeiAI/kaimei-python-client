@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.7.0 — Unreleased
+
+### Added
+
+- `client.models.activations(model, input=...)`: what every layer computed for one input
+  (`POST /v1/models/{id}/structure/activations`). Every stage reports its intensity, active share and
+  strongest channels or units; the detailed stages carry each channel's energy, the maps of the
+  strongest channels, a saliency map and, for narrow vectors, every value. `nodes=` picks the stages
+  to detail, `channels=` how many maps, `cam=[layer]` adds class attention (Grad-CAM) at a layer
+  toward `target=`, within the API's time budget.
+- `kaimei.activations`: `decode` for the byte-packed maps, `stage`, `feature_maps`, `saliency`,
+  `unit_values`, `class_attention`, and `plot_activations` (matplotlib), which draws the dashboard's
+  Sight strip: the picture, then each detailed feature map's saliency over it and its strongest
+  channel maps.
+- A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an
+  analysis, a page of any of them, or anything else with an `object` type) displays as a Kaimei
+  card: the mark, the dashboard's colours and type, and the dashboard's numbers formatted by the
+  same rules (`fmtSigned`, `pct`, `outputParts`, `compact`, ... ported name for name).
+  - An explanation shows the prediction (`died · P(died) = 92.6%`), the method, base value, model
+    calls and latency, a one-sentence summary, the diverging attribution bars with the input value
+    beside each feature (hover for six decimals; the rest of the features fold away), the class
+    probabilities, the counterfactual step by step, and the input and the JSON behind collapsible
+    sections. An image explanation shows the photo, the evidence heatmap and the focus (NumPy and
+    Pillow, when installed), the evidence check and its numbered regions.
+  - An insight shows its severity and score, the summary, and the payload as the dashboard draws
+    it: importance and interaction shares, drift by status with the PSI, behaviour curves, the
+    output histogram around the threshold (hover a bin), robustness, the learned rules.
+  - A model shows its task, framework, status, counts, outputs and features; a prediction its
+    output and input; an analysis its status, progress and timings; a page a table of its items
+    with the total and the window shown.
+  - The cards are HTML and CSS only (no script), render in JupyterLab, classic Jupyter, VS Code and
+    Colab, follow the host's dark theme, and link to the record in the dashboard
+    (`KAIMEI_DASHBOARD_URL` for a self-hosted one). `kaimei.display.html(record)` returns the HTML.
+- The plain data: `record.to_json()`; `record.to_frame()` (pandas) and `kaimei.display.rows(record)`
+  (no pandas) give the record's main table: one row per feature of an explanation (the API's
+  `top_features` rows as sent, then the remaining attributions ranked with `share` by the same
+  formula; regions for an image explanation), an insight payload's table (importance, drift,
+  interactions, fragile features, rules, one row per grid point of each behaviour curve, histogram
+  bins), a model's features, one flattened row per item of a page (`output.label`,
+  `attributions.Age`, ...).
+- `kaimei.set_display("raw")` makes cells show the JSON instead (a collapsible tree in JupyterLab);
+  `kaimei.display.using("raw")` does it for one block; `KAIMEI_DISPLAY=raw` sets the default.
+  Nested values such as `explanation.output` keep their plain repr in every mode.
+
 ## 0.6.3 — 2026-10-25
 
 ### Fixed

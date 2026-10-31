@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union
 
 from .._objects import APIObject
 from ..structure import (
@@ -386,6 +386,38 @@ class Models(Resource):
         """Replay one prediction. ``detail="summary"`` returns per-node statistics for large models."""
         body = {"input": dict(input), "detail": detail, "nodes": list(nodes) if nodes is not None else None, "tree": tree}
         return self._post(f"/v1/models/{model}/structure/trace", compact(body))
+
+    def activations(
+        self,
+        model: str,
+        *,
+        input: Mapping[str, Any],
+        nodes: Optional[Sequence[str]] = None,
+        channels: Optional[int] = None,
+        max_side: Optional[int] = None,
+        units: Optional[int] = None,
+        cam: Optional[Sequence[str]] = None,
+        target: Optional[Union[int, str]] = None,
+    ):
+        """What every layer computed for one input.
+
+        Every stage reports its intensity, active share and strongest channels or units. The
+        detailed stages (``nodes``; default: up to 24 feature maps plus the output) also carry
+        the ``Σ|a|`` energy of each channel, the maps of the ``channels`` strongest ones (at
+        most ``max_side`` cells on a side), a saliency map and, for vectors up to 4,096 units,
+        every value. ``cam`` names layers for class attention (Grad-CAM) toward ``target``.
+        Decode the byte-packed maps with :mod:`kaimei.activations`.
+        """
+        body = {
+            "input": dict(input),
+            "nodes": list(nodes) if nodes is not None else None,
+            "channels": channels,
+            "max_side": max_side,
+            "units": units,
+            "cam": list(cam) if cam is not None else None,
+            "target": target,
+        }
+        return self._post(f"/v1/models/{model}/structure/activations", compact(body))
 
     def structure_parameter(
         self,

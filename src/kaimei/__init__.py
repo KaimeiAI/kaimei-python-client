@@ -15,8 +15,11 @@ Then::
     )
 """
 
+from . import display
 from ._objects import APIObject, Page
 from .client import Kaimei, __version__
+from .display import mode as display_mode
+from .display import set_mode as set_display
 from .errors import (
     APIConnectionError,
     APIStatusError,
@@ -33,6 +36,9 @@ __all__ = [
     "Extraction",
     "extract_structure",
     "Kaimei",
+    "display",
+    "display_mode",
+    "set_display",
     "KaimeiError",
     "AuthenticationError",
     "PermissionDeniedError",

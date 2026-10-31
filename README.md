@@ -139,6 +139,41 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](https://github.co
 
 Unknown Keras / PyTorch layers that keep their input's shape are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL. Operations that change the shape and cannot be replayed (for example ShuffleNet's channel shuffle or an upsampling decoder) raise `StructureError(code="unsupported_layers")` naming them; register such models with a remote inference URL instead.
 
+### Results in a notebook
+
+A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an analysis, or a page of them) shows as a Kaimei card: the mark, the dashboard's colours and the dashboard's numbers, formatted by the same rules. An explanation card has the prediction, the attribution bars (hover a bar for its full precision), the probabilities, the counterfactual, and the input and JSON behind collapsible sections; an image explanation adds the photo, the evidence heatmap and the focus, with its regions. Insight cards draw importance shares, drift by status, behaviour curves, the output histogram and the learned rules the way the dashboard's cards do. The cards are plain HTML and CSS, so they render in JupyterLab, classic Jupyter, VS Code and Colab, follow the host's dark theme, and link back to the record in the dashboard.
+
+```python
+explanation = client.explanations.create(model="titanic-forest", input=passenger, method="shap")
+explanation            # the card
+```
+
+For the plain data instead:
+
+```python
+explanation.to_dict()  # the JSON the API returned, as a dict
+explanation.to_json()  # the same, as a string
+explanation.to_frame() # the dashboard's table as a pandas DataFrame
+#    rank feature value  attribution   share direction
+# 0     1     Sex  male       -0.091  0.5112  negative
+# 1     2  Pclass     3       -0.042  0.2360  negative
+# ...
+```
+
+`to_frame()` gives the record's main table: one row per feature for an explanation (the API's `top_features` rows as sent, then the remaining `attributions` with `share` and `rank` by the same formula; an image explanation lists its regions), the payload's table for an insight (importance shares, PSI per feature, interaction pairs, fragile features, rules, one row per grid point of each behaviour curve, histogram bins), the features of a model, and one flattened row per item for a page (`output.label`, `attributions.Age`, ...). `kaimei.display.rows(record)` is the same without pandas.
+
+If you never want the cards:
+
+```python
+import kaimei
+kaimei.set_display("raw")     # cells show the JSON (a collapsible tree in JupyterLab); "rich" restores the cards
+
+with kaimei.display.using("raw"):
+    explanation               # raw for this block only
+```
+
+`KAIMEI_DISPLAY=raw` in the environment sets the default, `kaimei.display.html(record)` returns a card's HTML for a report of your own, and `KAIMEI_DASHBOARD_URL` points the cards' links at a self-hosted dashboard.
+
 ### Tabular explanations in a notebook
 
 `kaimei.tabular` turns explanations and insights into sentences and charts in the dashboard's colours (`pip install matplotlib` for the charts):
@@ -224,6 +259,25 @@ Image explanations carry, besides `options["heatmap"]`, the regions the attribut
 The helpers render all of it with NumPy and Pillow only, byte for byte like the dashboard: `render_explanation(image, explanation, mode=...)`; `overlay_heatmap(image, heatmap, method=..., mode=..., threshold=...)` for raw heatmaps (without `method` it infers one: a map with negative values is a region map, anything else Grad-CAM); `evidence_images(image, explanation)` for the three evidence pictures, blurred with `gaussian_blur` (the API's exact blur) or grayed, as the API did; `numbered_regions(explanation)` for the regions to call out, numbered 1..N: up to five *for* the class, strongest first, then up to three *against* it; `focus_mask` / `region_mask(explanation, "upper left", h, w)` for pixel masks; and the building blocks `upsample_heatmap`, `heat_color`, `heat_alpha` and `focus_threshold`. `plot_explanation` (needs matplotlib) draws the dashboard's view: the photo, the heatmap with those numbers as badges at the regions' anchors, and the spotlight; below, the evidence pictures with their probabilities; on the right, a bar chart of the same numbered regions ("For cat" in orange, "Against cat" in blue; Grad-CAM lists its strongest regions), with the summary as the title. It returns the figure; pass `figure=` (a figure or subfigure) to draw several in one. Regression records print values with three significant figures instead of probabilities. `import kaimei.images` loads neither Pillow nor matplotlib.
 
 [`examples/cats_dogs_gradcam.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it with the photos in [`examples/photos`](https://github.com/KaimeiAI/kaimei-python-client/tree/main/examples/photos) attached as clickable examples, and explains new photos (`explain` prints the summary, the evidence check and the numbered regions, and saves the figure). [`examples/cats_dogs_explain.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_explain.ipynb) asks the model *why* on those photos and draws every answer as the dashboard does: Grad-CAM on a cat and a dog, "why cat?" and "why dog?" on the cat-and-dog composite (each question lights up its own animal and marks the other one against), Grad-CAM, occlusion and LIME side by side on the beagle, and a gallery in which Grad-CAM finds the face on every photo while LIME singles out the ears and eyes of the cats and the noses of the dogs.
+
+#### What the layers see
+
+`client.models.activations` runs one input through an uploaded network and returns what every layer computed, the data behind the dashboard's **Sight** view: per stage how strongly it fired and which channels or units led; for the detailed stages (the API picks up to 24 feature maps plus the output, or pass `nodes=[...]`) each channel's energy, the maps of the strongest channels, a saliency map showing where in the picture the layer responds and, for narrow vectors, every value. `cam=[layer]` adds class attention (Grad-CAM) at that layer toward `target=` when it fits the API's time budget; early layers of a big network can be too slow, and the stage then says why.
+
+```python
+from kaimei.activations import class_attention, feature_maps, plot_activations, saliency, stage
+
+result = client.models.activations("cats-dogs-photos", input={"photo": photo}, channels=8)
+print(result.output["label"], [s["node_id"] for s in result.stages if s["detailed"]])
+last = stage(result)                 # the last detailed feature map
+maps = feature_maps(last)            # {channel: (h, w) array}, strongest first
+where = saliency(last)               # (h, w): mean |activation| over channels
+plot_activations(result, image=photo)  # matplotlib: the Sight strip
+
+focused = client.models.activations("cats-dogs-photos", input={"photo": photo},
+                                    nodes=[last["node_id"]], cam=[last["node_id"]], target="dog")
+heat = class_attention(stage(focused, last["node_id"]))  # (H, W) Grad-CAM in [0, 1], or None
+```
 
 The JSON spec warns above ~2 MB; lower `externalize_above` if you see it. Each binary tensor may hold up to 250M values (the API's default cap on a single upload is 512 MB compressed).
 
