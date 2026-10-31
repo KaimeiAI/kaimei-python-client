@@ -225,6 +225,25 @@ The helpers render all of it with NumPy and Pillow only, byte for byte like the 
 
 [`examples/cats_dogs_gradcam.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_gradcam.py) trains a MobileNetV2 cat/dog classifier on the Oxford-IIIT Pet photos, uploads it with the photos in [`examples/photos`](https://github.com/KaimeiAI/kaimei-python-client/tree/main/examples/photos) attached as clickable examples, and explains new photos (`explain` prints the summary, the evidence check and the numbered regions, and saves the figure). [`examples/cats_dogs_explain.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_explain.ipynb) asks the model *why* on those photos and draws every answer as the dashboard does: Grad-CAM on a cat and a dog, "why cat?" and "why dog?" on the cat-and-dog composite (each question lights up its own animal and marks the other one against), Grad-CAM, occlusion and LIME side by side on the beagle, and a gallery in which Grad-CAM finds the face on every photo while LIME singles out the ears and eyes of the cats and the noses of the dogs.
 
+#### What the layers see
+
+`client.models.activations` runs one input through an uploaded network and returns what every layer computed, the data behind the dashboard's **Sight** view: per stage how strongly it fired and which channels or units led; for the detailed stages (the API picks up to 24 feature maps plus the output, or pass `nodes=[...]`) each channel's energy, the maps of the strongest channels, a saliency map showing where in the picture the layer responds and, for narrow vectors, every value. `cam=[layer]` adds class attention (Grad-CAM) at that layer toward `target=` when it fits the API's time budget; early layers of a big network can be too slow, and the stage then says why.
+
+```python
+from kaimei.activations import class_attention, feature_maps, plot_activations, saliency, stage
+
+result = client.models.activations("cats-dogs-photos", input={"photo": photo}, channels=8)
+print(result.output["label"], [s["node_id"] for s in result.stages if s["detailed"]])
+last = stage(result)                 # the last detailed feature map
+maps = feature_maps(last)            # {channel: (h, w) array}, strongest first
+where = saliency(last)               # (h, w): mean |activation| over channels
+plot_activations(result, image=photo)  # matplotlib: the Sight strip
+
+focused = client.models.activations("cats-dogs-photos", input={"photo": photo},
+                                    nodes=[last["node_id"]], cam=[last["node_id"]], target="dog")
+heat = class_attention(stage(focused, last["node_id"]))  # (H, W) Grad-CAM in [0, 1], or None
+```
+
 The JSON spec warns above ~2 MB; lower `externalize_above` if you see it. Each binary tensor may hold up to 250M values (the API's default cap on a single upload is 512 MB compressed).
 
 ## What you can do

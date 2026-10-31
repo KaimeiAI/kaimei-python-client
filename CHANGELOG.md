@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 — Unreleased
+
+### Added
+
+- `client.models.activations(model, input=...)`: what every layer computed for one input
+  (`POST /v1/models/{id}/structure/activations`). Every stage reports its intensity, active share and
+  strongest channels or units; the detailed stages carry each channel's energy, the maps of the
+  strongest channels, a saliency map and, for narrow vectors, every value. `nodes=` picks the stages
+  to detail, `channels=` how many maps, `cam=[layer]` adds class attention (Grad-CAM) at a layer
+  toward `target=`, within the API's time budget.
+- `kaimei.activations`: `decode` for the byte-packed maps, `stage`, `feature_maps`, `saliency`,
+  `unit_values`, `class_attention`, and `plot_activations` (matplotlib), which draws the dashboard's
+  Sight strip: the picture, then each detailed feature map's saliency over it and its strongest
+  channel maps.
+
 ## 0.6.3 — 2026-10-25
 
 ### Fixed
