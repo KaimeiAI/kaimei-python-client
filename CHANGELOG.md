@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.7.0 — Unreleased
+## 0.7.1 — 2026-11-01
+
+### Fixed
+
+- Notebook cards keep their layout on GitHub and in other viewers that drop `<style>` blocks from
+  HTML outputs. Each element now repeats its resting style inline, reading the theme's colours with
+  the light theme as the fallback, and the logo and charts carry size attributes. Before, GitHub
+  showed the logo as wide as the page and the rest unstyled. The stylesheet still drives the dark
+  theme, hover and open sections in Jupyter, VS Code and Colab.
+- GitHub's viewer also removes `<details>` and `<summary>`, which unfolded every section. The
+  sections still read well open, except the JSON dumps: those are now hidden where the stylesheet
+  is missing and shown, folded, everywhere else.
+- The what-if steps of an explanation card name the probability they report: `→ P(survived) 33.9%
+  · died` rather than `→ 33.9% died`, which read as the probability of dying. The before/after line
+  says `P(survived) 7.4% → 33.9%` instead of `Output`.
+- List cards (pages of models, explanations, predictions or insights) are wider, so every column
+  fits; before, the last columns of a model list scrolled out of view.
+- mypy passes again on the card renderer (CI).
+
+## 0.7.0 — 2026-10-31
 
 ### Added
 
