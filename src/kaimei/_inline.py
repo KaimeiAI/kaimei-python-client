@@ -12,6 +12,8 @@ style inline:
 - A property that a ``:hover`` / ``[open]`` / ``:last-child`` rule or an ``@supports`` block changes
   is left to the stylesheet (with any shorthand that covers it), because an inline value always
   wins over a stylesheet rule.
+- ``!important`` declarations stay in the stylesheet: they exist to override inline styles (a
+  section hidden inline where the stylesheet is missing, shown by the stylesheet).
 - Pseudo-element rules (``::before``) and interaction-only properties are not copied, and a
   ``<summary>`` keeps its native disclosure marker.
 
@@ -80,7 +82,10 @@ class _Sheet:
                 if stateful:
                     self.states.append((parts, {p for p, _ in declarations}))
                     continue
-                kept = [(p, v) for p, v in declarations if not p.startswith("--") and p not in _NEVER]
+                important = {p for p, v in declarations if "!important" in v}
+                if important:
+                    self.states.append((parts, important))
+                kept = [(p, v) for p, v in declarations if not p.startswith("--") and p not in _NEVER and p not in important]
                 if kept:
                     self.rules.append((parts, specificity, order, kept))
                     order += 1

@@ -9,6 +9,9 @@
   the light theme as the fallback, and the logo and charts carry size attributes. Before, GitHub
   showed the logo as wide as the page and the rest unstyled. The stylesheet still drives the dark
   theme, hover and open sections in Jupyter, VS Code and Colab.
+- GitHub's viewer also removes `<details>` and `<summary>`, which unfolded every section. The
+  sections still read well open, except the JSON dumps: those are now hidden where the stylesheet
+  is missing and shown, folded, everywhere else.
 - The what-if steps of an explanation card name the probability they report: `→ P(survived) 33.9%
   · died` rather than `→ 33.9% died`, which read as the probability of dying. The before/after line
   says `P(survived) 7.4% → 33.9%` instead of `Output`.

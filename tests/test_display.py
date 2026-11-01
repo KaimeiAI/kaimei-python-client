@@ -150,6 +150,12 @@ def test_cards_keep_their_layout_where_style_blocks_are_dropped():
     assert "padding:5px 8px" in cell and "border" not in cell  # the last row's border is a :last-child rule
     word = re.search(r'<i( style="[^"]*")?>mei</i>', body).group(1) or ""
     assert "color" not in word  # the gradient text comes from an @supports rule
+    # GitHub also drops <details> and <summary>, keeping their contents: the JSON dump stays hidden
+    # there, while the stylesheet shows it again everywhere else.
+    github = re.sub(r"</?(details|summary)[^>]*>", "", body)
+    hidden = github.index('<div class="km-raw" style="display:none">')
+    assert github.index('class="km-json"') > hidden and ".km .km-raw{display:block!important}" in css
+    assert github.index("Input") < hidden  # the input table still shows
 
 
 def test_feature_names_and_values_are_escaped():

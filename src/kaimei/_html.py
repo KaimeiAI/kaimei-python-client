@@ -56,6 +56,7 @@ CSS = (
     "color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px 18px 14px;"
     "max-width:780px;box-shadow:var(--shadow);margin:4px 0;text-align:left;box-sizing:border-box}"
     ".km.wide{max-width:1080px}"
+    ".km .km-raw{display:block!important}"
     ".km *{box-sizing:border-box}"
     'body[data-jp-theme-light="false"] .km,body.vscode-dark .km,body.vscode-high-contrast .km,body.theme-dark .km,'
     'body[theme="dark"] .km,.km.dark{--bg:#141826;--bg2:#10131d;--line:rgba(255,255,255,.08);'
@@ -390,6 +391,16 @@ def _details(summary: str, body: str, *, open_: bool = False, note: str = "") ->
     )
 
 
+def _raw_json(summary: str, value: Any, note: str = "") -> str:
+    """A folded JSON section, hidden where the stylesheet is missing.
+
+    GitHub's notebook viewer drops ``<style>``, ``<details>`` and ``<summary>`` (keeping their
+    contents), which would unfold a long JSON dump in every card. The wrapper is hidden inline and
+    the stylesheet shows it again with ``!important``.
+    """
+    return f'<div class="km-raw" style="display:none">{_details(summary, _json_block(value), note=note)}</div>'
+
+
 def _json_block(value: Any) -> str:
     text = json.dumps(_light(value), indent=2, default=str, ensure_ascii=False)
     return f'<pre class="km-json">{_e(text)}</pre>'
@@ -639,7 +650,7 @@ def _explanation(data: Mapping[str, Any]) -> str:
 
     if inputs:
         out.append(_details("Input", _kv_table((k, _e(_input_text(v))) for k, v in inputs.items()), note=f"{len(inputs)} features"))
-    out.append(_details("JSON", _json_block(data), note="arrays elided; to_json() has everything"))
+    out.append(_raw_json("JSON", data, note="arrays elided; to_json() has everything"))
     left = f"Logged as <span class=km-mono>{_e(data.get('id') or '—')}</span>"
     if data.get("model_id"):
         left += f" · model <span class=km-mono>{_e(data['model_id'])}</span>"
@@ -826,7 +837,7 @@ def _insight(data: Mapping[str, Any]) -> str:
     if summary:
         out.append(f'<div class="km-lead">{_e(summary)}</div>')
     out.append(_insight_payload(kind, payload))
-    out.append(_details("Payload JSON", _json_block(payload), note="arrays elided; to_dict() has everything"))
+    out.append(_raw_json("Payload JSON", payload, note="arrays elided; to_dict() has everything"))
     left = f"model <span class=km-mono>{_e(data['model_id'])}</span>" if data.get("model_id") else ""
     link = _link(f"/insights/{data['id']}", "Open in dashboard") if data.get("id") else ""
     out.append(_foot(left, link))
@@ -1024,7 +1035,7 @@ def _model(data: Mapping[str, Any]) -> str:
             rows,
         )
         out.append(_details("Features", table, open_=len(features) <= 12, note=f"{len(features)}"))
-    out.append(_details("JSON", _json_block(data), note="arrays elided; to_json() has everything"))
+    out.append(_raw_json("JSON", data, note="arrays elided; to_json() has everything"))
     link = _link(f"/models/{data['slug']}", "Open in dashboard") if data.get("slug") else ""
     out.append(_foot(_when(data, "updated ", "updated_at"), link))
     return "".join(out)
@@ -1058,7 +1069,7 @@ def _prediction(data: Mapping[str, Any]) -> str:
     inputs = _map(data.get("input"))
     if inputs:
         out.append(_details("Input", _kv_table((k, _e(_input_text(v))) for k, v in inputs.items()), open_=len(inputs) <= 12, note=f"{len(inputs)} features"))
-    out.append(_details("JSON", _json_block(data), note="arrays elided; to_json() has everything"))
+    out.append(_raw_json("JSON", data, note="arrays elided; to_json() has everything"))
     out.append(_foot(f"Logged as <span class=km-mono>{_e(data.get('id') or '—')}</span>", ""))
     return "".join(out)
 
@@ -1089,10 +1100,10 @@ def _analysis(data: Mapping[str, Any]) -> str:
         out.append(f'<div class="km-error">{_e(data["error"])}</div>')
     options = _map(data.get("options"))
     if options:
-        out.append(_details("Options", _json_block(options)))
+        out.append(_raw_json("Options", options))
     if insight_ids:
         out.append(_details("Insight ids", _kv_table((str(i + 1), f"<span class=km-mono>{_e(x)}</span>") for i, x in enumerate(insight_ids)), note=f"{len(insight_ids)}"))
-    out.append(_details("JSON", _json_block(data)))
+    out.append(_raw_json("JSON", data))
     out.append(_foot(f"<span class=km-mono>{_e(data.get('id') or '—')}</span>", ""))
     return "".join(out)
 
@@ -1246,5 +1257,5 @@ def _generic(data: Mapping[str, Any]) -> str:
             out.append(_details(f"{title_case(key)}", _table([(title_case(c), "") for c in columns], rows), note=str(len(value))))
         else:
             out.append(_details(title_case(key), _json_block(value)))
-    out.append(_details("JSON", _json_block(data)))
+    out.append(_raw_json("JSON", data))
     return "".join(out)
