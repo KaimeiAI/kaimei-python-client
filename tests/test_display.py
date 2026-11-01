@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -24,6 +25,15 @@ TOP = [
     {"feature": "Sex", "attribution": -0.091, "value": "male", "share": 0.5112, "direction": "negative", "rank": 1},
     {"feature": "Pclass", "attribution": -0.042, "value": 3, "share": 0.236, "direction": "negative", "rank": 2},
 ]
+
+
+def _unstyled(html):
+    """A card without the inline copies of its styles, to check its content and structure."""
+    return re.sub(r' style="[^"]*"', "", html)
+
+
+def _card(record):
+    return _unstyled(display.html(record))
 
 
 def _record(**overrides):
@@ -77,7 +87,7 @@ def test_numbers_format_as_the_dashboard_formats_them():
 def test_explanation_card_reads_like_the_dashboard():
     bundle, metadata = _record()._repr_mimebundle_()
     assert set(bundle) == {"text/html", "text/plain"} and metadata == {}
-    html = bundle["text/html"]
+    html = _unstyled(bundle["text/html"])
     assert html.startswith("<style>") and 'class="km"' in html
     assert "kai<i>mei</i>" in html and "<svg" in html  # the mark and the wordmark
     assert "Explanation" in html and "expl_1" in html and "Oct 25, 2026, 15:04 UTC" in html
@@ -93,16 +103,17 @@ def test_explanation_card_reads_like_the_dashboard():
     assert "The model predicts died: P(survived) = 7.4%" in html
     assert "92.6%" in html and "7.4%" in html
     assert "Closest the counterfactual search got" in html
-    assert "Set <b>Fare</b> from <b>7.25</b>" in html and "<b>73.5</b>" in html and "22.9% died" in html
-    assert "Output 7.4% → 35.9%" in html and "Decision threshold 50.0%" in html
+    assert "Set <b>Fare</b> from <b>7.25</b>" in html and "<b>73.5</b>" in html
+    assert "→ P(survived) 22.9% · died" in html and "22.9% died" not in html  # names what 22.9% is
+    assert "P(survived) 7.4% → 35.9%" in html and "Decision threshold 50.0%" in html
     assert "5 features" in html and "<td class=\"mono muted\">Age</td><td class=\"num mono\">22</td>" in html
     assert "/explanations/expl_1" in html and "Open in dashboard" in html
     assert bundle["text/plain"] == "<Kaimei explanation expl_1>"
 
 
 def test_flipped_counterfactual_and_regression_outputs():
-    html = display.html(_record(counterfactual=FLIPPED))
-    assert "Smallest change that flips the decision" in html and "54.1% survived" in html
+    html = _card(_record(counterfactual=FLIPPED))
+    assert "Smallest change that flips the decision" in html and "P(survived) 54.1% · survived" in html and "54.1% survived" not in html
     regression = APIObject(
         {
             "object": "explanation", "id": "expl_r", "model_id": "m", "method": "shap",
@@ -113,15 +124,37 @@ def test_flipped_counterfactual_and_regression_outputs():
             "options": {}, "metadata": {}, "created_at": "2026-10-25T15:04:05Z",
         }
     )
-    html = display.html(regression)
+    html = _card(regression)
     assert 'class="km-value">412,350.5<' in html and 'class="km-sub">USD<' in html
     assert "pushes higher" in html and "pushes lower" in html and "+61250.000" in html
     assert "Output 412,350.5 → 440,000" in html and "Target value 430,000" in html and "· yes" in html
 
 
+def test_cards_keep_their_layout_where_style_blocks_are_dropped():
+    """GitHub's notebook viewer removes <style> elements but keeps style attributes."""
+    html = display.html(_record(counterfactual=FLIPPED))
+    css, body = html.split("</style>", 1)
+    assert css.startswith("<style>.km{") and "<style" not in body
+    root = re.match(r'<div style="([^"]*)" class="km">', body).group(1)
+    assert "max-width:780px" in root and "background:var(--bg,#ffffff)" in root and "'Segoe UI'" in root
+    assert re.search(r'<svg style="width:18px;height:18px;[^"]*" width="18" height="18" viewBox="0 0 1024 1024"', body)  # the logo keeps its size
+    styles = re.findall(r' style="([^"]*)"', body)
+    assert len(styles) > 50 and not any(re.search(r"(^|;)--", style) for style in styles)  # themes stay in the stylesheet
+    fill = re.search(r'<span class="km-fill neg" style="([^"]*)"', body).group(1)
+    assert fill.startswith("position:absolute") and "linear-gradient" in fill and re.search(r";left:[0-9.]+%;width:[0-9.]+%$", fill)
+    row = re.search(r'<div style="([^"]*)" class="km-row"', body).group(1)
+    assert "grid-template-columns" in row and "background" not in row  # its hover highlight stays in the stylesheet
+    summary = re.search(r'<summary style="([^"]*)"', body).group(1)
+    assert "padding" in summary and "display" not in summary and "list-style" not in summary  # keeps its marker
+    cell = re.search(r'<td style="([^"]*)"', body).group(1)
+    assert "padding:5px 8px" in cell and "border" not in cell  # the last row's border is a :last-child rule
+    word = re.search(r'<i( style="[^"]*")?>mei</i>', body).group(1) or ""
+    assert "color" not in word  # the gradient text comes from an @supports rule
+
+
 def test_feature_names_and_values_are_escaped():
     record = _record(attributions={"<script>alert(1)</script>": 0.5}, top_features=[], input={"<script>alert(1)</script>": "<b>"})
-    html = display.html(record)
+    html = _card(record)
     assert "<script>" not in html and "&lt;script&gt;" in html and "&lt;b&gt;" in html
 
 
@@ -189,25 +222,25 @@ def test_rows_without_pandas():
 def test_insight_cards_and_tables():
     pytest.importorskip("pandas")
     by_type = {str(i.type): i for i in INSIGHTS}
-    html = display.html(by_type["drift"])
+    html = _card(by_type["drift"])
     assert "PSI 0.31" in html and 'class="km-badge bad">significant' in html and "891 reference vs 418 recent rows" in html
     assert 'class="km-fill significant"' in html and 'class="km-fill stable"' in html and "0.03" in html
     assert by_type["drift"].to_frame()["psi"].tolist() == [0.03, 0.31]
-    html = display.html(by_type["global_importance"])
+    html = _card(by_type["global_importance"])
     assert "27%" in html and "15%" in html and "accuracy 0.85" in html
-    html = display.html(by_type["behavior"])
+    html = _card(by_type["behavior"])
     assert "<svg" in html and "threshold 0.5" in html and "survived 40.0%" in html and "died 60.0%" in html
     assert by_type["behavior"].to_frame().columns.tolist() == ["bin_start", "bin_end", "count"]
-    html = display.html(by_type["partial_dependence"])
+    html = _card(by_type["partial_dependence"])
     assert html.count('stroke="var(--series-1)"') == 3 and "decreasing" in html and "non monotonic" in html
     curves = by_type["partial_dependence"].to_frame()
     assert curves.columns.tolist() == ["feature", "type", "grid", "pd", "monotonicity"] and len(curves) == 8
-    html = display.html(by_type["interactions"])
+    html = _card(by_type["interactions"])
     assert "Sex × Pclass" in html and "12%" in html
     assert by_type["interactions"].to_frame().iloc[0].to_dict() == {"feature_a": "Sex", "feature_b": "Pclass", "strength": 0.12}
-    html = display.html(by_type["robustness"])
+    html = _card(by_type["robustness"])
     assert "ε 0.05" in html and "<b>Fare</b>" in html and "<b>Sex</b>" not in html  # a zero sensitivity is not a bar
-    html = display.html(by_type["learned_rules"])
+    html = _card(by_type["learned_rules"])
     assert "Sex = female pushes the probability of survived highest." in html and "`" not in html.split("km-rules")[1].split("</div></div>")[0]
     assert by_type["learned_rules"].to_frame()["statement"].tolist() == ["`Sex` = female pushes the probability of survived highest."]
 
@@ -218,7 +251,7 @@ def test_model_prediction_analysis_and_generic_cards():
                        "status": "active", "reference_rows": 891, "predictions_count": 12480, "tags": ["demo"],
                        "outputs": {"labels": ["died", "survived"], "positive_label": "survived", "threshold": 0.5},
                        "created_at": "2026-10-20T09:00:00Z", "updated_at": "2026-10-25T15:06:40Z"})
-    html = display.html(model)
+    html = _card(model)
     assert "Titanic forest" in html and ">v2<" in html and ">Binary<" in html and "Active" in html and "#demo" in html
     assert "12.5K" in html and "891" in html and "female, male" in html and ">years<" in html
     assert "threshold 0.5" in html and "positive survived" in html and "/models/titanic-forest" in html
@@ -227,22 +260,22 @@ def test_model_prediction_analysis_and_generic_cards():
     prediction = APIObject({"object": "prediction", "id": "pred_1", "model_id": "mdl_1", "input": dict(PASSENGER),
                             "output": {"label": "died", "probability": 0.926, "probabilities": {"died": 0.926, "survived": 0.074}},
                             "latency_ms": 3.2, "source": "api", "metadata": {}, "created_at": "2026-10-25T15:04:05Z"})
-    html = display.html(prediction)
+    html = _card(prediction)
     assert "P(died) = 92.6%" in html and ">api<" in html and "3 ms" in html and "92.6%" in html and "7.4%" in html
     assert prediction.to_frame().loc[0, "output.probability"] == 0.926
 
     analysis = APIObject({"object": "analysis", "id": "ana_1", "model_id": "mdl_1", "type": "full", "status": "running",
                           "progress": 0.4, "options": {}, "error": None, "insight_ids": ["ins_1", "ins_2"], "n_evals": 12480,
                           "created_at": "2026-10-25T15:04:05Z", "started_at": "2026-10-25T15:04:06Z", "completed_at": None})
-    html = display.html(analysis)
+    html = _card(analysis)
     assert "Running" in html and "40% done" in html and "12.5K" in html and "ins_2" in html
     finished = APIObject({**analysis.to_dict(), "status": "completed", "progress": 1.0, "completed_at": "2026-10-25T15:06:40Z", "error": "boom"})
-    html = display.html(finished)
+    html = _card(finished)
     assert "Completed" in html and "2m 34s" in html and "boom" in html and "% done" not in html
 
     organization = APIObject({"object": "organization", "id": "org_1", "name": "Acme", "slug": "acme", "plan": "pro",
                               "settings": {"a": 1}, "quotas": {"limits": {"x": 1}}, "created_at": "2026-10-25T15:04:05Z"})
-    html = display.html(organization)
+    html = _card(organization)
     assert "Organization" in html and "Acme" in html and ">pro<" in html and "Quotas" in html
 
 
@@ -250,7 +283,8 @@ def test_page_card_and_frame():
     pytest.importorskip("pandas")
     page = Page({"object": "list", "data": [_record().to_dict(), _record(id="expl_2").to_dict()], "total": 57, "limit": 2,
                  "offset": 10, "has_more": True})
-    html = display.html(page)
+    assert re.match(r'<style>.*</style><div style="[^"]*max-width:1080px[^"]*" class="km wide">', display.html(page), re.S)
+    html = _card(page)
     assert "57 explanations" in html and "showing 11–12" in html and "auto_paging_iter" in html
     assert "expl_2" in html and "Sex −0.09" in html and "KernelSHAP" in html and "92.6%" in html
     frame = page.to_frame()
@@ -259,10 +293,10 @@ def test_page_card_and_frame():
     assert frame["attributions.Sex"].tolist() == [-0.091, -0.091]
     assert "top_features" not in frame.columns  # tables are not flattened into a row
     empty = Page({"object": "list", "data": [], "total": 0, "limit": 20, "offset": 0, "has_more": False})
-    assert "Nothing on this page" in display.html(empty)
+    assert "Nothing on this page" in _card(empty)
     assert empty.to_frame().empty
     insights = Page({"object": "list", "data": [i.to_dict() for i in INSIGHTS], "total": 7, "limit": 50, "offset": 0, "has_more": False})
-    assert "7 insights" in display.html(insights)
+    assert "7 insights" in _card(insights)
     assert len(insights.to_frame()) == 7
 
 
@@ -289,7 +323,7 @@ def test_image_explanation_card_lists_regions_and_draws_the_photo():
             "metadata": {}, "created_at": "2026-10-25T15:04:05Z",
         }
     )
-    html = display.html(record)
+    html = _card(record)
     assert html.count("data:image/png;base64,") == 3 and ">Photo<" in html and ">Evidence<" in html and ">Focus<" in html
     assert "Half of the evidence for cat" in html
     assert "P(cat) photo 97.0%" in html and "focus hidden 41.0%" in html and "focus only 95.0%" in html
@@ -302,7 +336,7 @@ def test_image_explanation_card_lists_regions_and_draws_the_photo():
 
 
 def test_html_takes_plain_dicts_and_unknown_types():
-    html = display.html({"object": "widget", "id": "w_1", "name": "Thing", "size": 3, "parts": [{"a": 1}, {"a": 2}]})
+    html = _card({"object": "widget", "id": "w_1", "name": "Thing", "size": 3, "parts": [{"a": 1}, {"a": 2}]})
     assert "Widget" in html and "Thing" in html and ">3<" in html and "Parts" in html
     with pytest.raises(TypeError):
         display.html("not a record")

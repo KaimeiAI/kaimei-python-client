@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 from html import escape
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from ._inline import inline_styles
+
 __all__ = ["render", "CSS"]
 
 DASHBOARD_URL = "https://dashboard.kaimei.ai"
@@ -31,7 +33,7 @@ _MONO = '"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
 
 #: The dashboard's mark (its favicon), inline so the card needs no network.
 MARK = (
-    '<svg viewBox="0 0 1024 1024" fill="none" aria-hidden="true">'
+    '<svg width="18" height="18" viewBox="0 0 1024 1024" fill="none" aria-hidden="true">'
     '<rect width="1024" height="1024" rx="230" fill="#0f0f10"/>'
     '<rect x="248" y="232" width="122" height="558" rx="61" fill="#ffffff"/>'
     '<path d="M418 512 L730 232 A387 387 0 0 1 730 792 Z" fill="url(#km-k)" stroke="url(#km-k)" '
@@ -53,6 +55,7 @@ CSS = (
     'font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:13px;line-height:1.45;'
     "color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px 18px 14px;"
     "max-width:780px;box-shadow:var(--shadow);margin:4px 0;text-align:left;box-sizing:border-box}"
+    ".km.wide{max-width:1080px}"
     ".km *{box-sizing:border-box}"
     'body[data-jp-theme-light="false"] .km,body.vscode-dark .km,body.vscode-high-contrast .km,body.theme-dark .km,'
     'body[theme="dark"] .km,.km.dark{--bg:#141826;--bg2:#10131d;--line:rgba(255,255,255,.08);'
@@ -524,7 +527,7 @@ def _histogram(counts: Sequence[float], edges: Sequence[float], threshold: Optio
     def fmt(v: float) -> str:
         return f"{v:.0f}" if abs(v) >= 100 else f"{v:.2f}"
 
-    out = [f'<div class="km-chart"><svg viewBox="0 0 {width} {height}" role="img" aria-label="Output distribution">']
+    out = [f'<div class="km-chart"><svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-label="Output distribution">']
     for i, count in enumerate(counts):
         h = count / largest * inner_h
         x = pad_l + i * (bar_w + gap)
@@ -551,7 +554,11 @@ def _histogram(counts: Sequence[float], edges: Sequence[float], threshold: Optio
 
 
 def render(data: Mapping[str, Any]) -> str:
-    """One HTML card (styles included) for a record, chosen by its ``object`` type."""
+    """One HTML card for a record, chosen by its ``object`` type.
+
+    The stylesheet comes first and each element repeats its resting style inline, so the card keeps
+    its layout in viewers that remove ``<style>`` blocks, such as GitHub's notebook viewer.
+    """
     kind = str(data.get("object") or "")
     builder: Callable[[Mapping[str, Any]], str] = {
         "explanation": _explanation,
@@ -561,7 +568,10 @@ def render(data: Mapping[str, Any]) -> str:
         "analysis": _analysis,
         "list": _page,
     }.get(kind, _generic)
-    return f"<style>{CSS}</style><div class=\"km\">{builder(data)}</div>"
+    card = f'<div class="{"km wide" if kind == "list" else "km"}">{builder(data)}</div>'
+    # The stylesheet drives themes and hover; the inline copy keeps the layout where a viewer
+    # drops <style> blocks (GitHub's notebook viewer does).
+    return f"<style>{CSS}</style>{inline_styles(card, CSS)}"
 
 
 def _explanation(data: Mapping[str, Any]) -> str:
@@ -624,7 +634,8 @@ def _explanation(data: Mapping[str, Any]) -> str:
 
     counterfactual = data.get("counterfactual")
     if isinstance(counterfactual, Mapping) and counterfactual:
-        out.append(_counterfactual(counterfactual, classification))
+        quantity = f"P({target})" if classification and isinstance(target, str) else None
+        out.append(_counterfactual(counterfactual, classification, quantity))
 
     if inputs:
         out.append(_details("Input", _kv_table((k, _e(_input_text(v))) for k, v in inputs.items()), note=f"{len(inputs)} features"))
@@ -677,7 +688,8 @@ def _tabular_lead(data: Mapping[str, Any]) -> str:
         return ""
 
 
-def _counterfactual(cf: Mapping[str, Any], classification: bool) -> str:
+def _counterfactual(cf: Mapping[str, Any], classification: bool, quantity: Optional[str] = None) -> str:
+    """The what-if search. ``quantity`` names the output it moves, e.g. ``P(survived)``."""
     changes = [c for c in (cf.get("changes") or []) if isinstance(c, Mapping)]
     found = bool(cf.get("found"))
     lines = []
@@ -687,8 +699,9 @@ def _counterfactual(cf: Mapping[str, Any], classification: bool) -> str:
         tail = ""
         if after is not None:
             label_after = change.get("label_after")
-            tail = f' <span class="km-faint">→ {pct(after, 1) if classification else fmt_number(after, 3)}'
-            tail += f" {_e(label_after)}</span>" if label_after else "</span>"
+            value = pct(after, 1) if classification else fmt_number(after, 3)
+            tail = f' <span class="km-faint">→ {_e(quantity) + " " if quantity else ""}{value}'
+            tail += f" · {_e(label_after)}</span>" if label_after else "</span>"
         lines.append(
             f'<div><span class="km-arrow">→</span><span>Set <b>{_e(feature)}</b> from <b>{_e(fmt_value(change.get("from")))}</b> '
             f'<span class="km-faint">→</span> <b>{_e(fmt_value(change.get("to")))}</b>{tail}</span></div>'
@@ -696,7 +709,7 @@ def _counterfactual(cf: Mapping[str, Any], classification: bool) -> str:
     before, after = _float(cf.get("output_before")), _float(cf.get("output_after"))
     if before is not None and after is not None:
         shown = (pct(before, 1), pct(after, 1)) if classification else (fmt_number(before, 3), fmt_number(after, 3))
-        lines.append(f'<span class="km-faint">Output {shown[0]} → {shown[1]}</span>')
+        lines.append(f'<span class="km-faint">{_e(quantity or "Output")} {shown[0]} → {shown[1]}</span>')
     goal = _map(cf.get("target"))
     if goal.get("kind") == "flip_decision" and goal.get("threshold") is not None:
         lines.append(f'<span class="km-faint">Decision threshold {pct(goal["threshold"], 1) if classification else fmt_number(goal["threshold"], 3)}</span>')
