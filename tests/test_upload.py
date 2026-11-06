@@ -113,6 +113,198 @@ def test_unknown_estimator_raises():
     assert exc.value.code == "unsupported_estimator"
 
 
+def _sklearn_problem():
+    pytest.importorskip("sklearn")
+    from sklearn.datasets import make_classification
+
+    return make_classification(n_samples=200, n_features=4, n_informative=3, n_redundant=0, random_state=0)
+
+
+NAMES = ["a", "b", "c", "d"]
+
+
+def test_forest_over_the_limit_is_a_summary_not_its_first_tree():
+    X, y = _sklearn_problem()
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    forest = RandomForestClassifier(31, max_depth=2, random_state=0).fit(X, y)
+    wrapped = [
+        forest,
+        GridSearchCV(RandomForestClassifier(31, max_depth=2, random_state=0), {"max_features": [2]}, cv=2).fit(X, y),
+        make_pipeline(StandardScaler(), RandomForestClassifier(31, max_depth=2, random_state=0)).fit(X, y),
+    ]
+    for estimator in wrapped:
+        spec = estimator_to_spec(estimator, feature_names=NAMES)
+        assert spec["family"] == "ensemble_summary"
+        assert spec["n_estimators"] == 31
+        assert not spec_is_executable(spec)
+    assert estimator_to_spec(RandomForestClassifier(30, max_depth=2, random_state=0).fit(X, y), feature_names=NAMES)["family"] == "ensemble"
+
+
+def test_boosting_is_a_summary_not_an_average():
+    X, y = _sklearn_problem()
+    from sklearn.ensemble import AdaBoostClassifier
+
+    for rounds in (10, 50):
+        spec = estimator_to_spec(AdaBoostClassifier(n_estimators=rounds, random_state=0).fit(X, y), feature_names=NAMES)
+        assert spec["family"] == "ensemble_summary"
+
+
+def test_meta_estimators_that_change_the_prediction_are_not_read_as_their_parts():
+    X, y = _sklearn_problem()
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.compose import TransformedTargetRegressor
+    from sklearn.ensemble import (
+        BaggingClassifier,
+        IsolationForest,
+        StackingClassifier,
+        VotingClassifier,
+    )
+    from sklearn.linear_model import LinearRegression, LogisticRegression
+    from sklearn.tree import DecisionTreeClassifier
+
+    logistic = LogisticRegression()
+    tree = DecisionTreeClassifier(max_depth=2, random_state=0)
+    for estimator in (
+        VotingClassifier([("l", logistic), ("t", tree)], voting="soft").fit(X, y),
+        VotingClassifier([("a", tree), ("b", DecisionTreeClassifier(max_depth=3))], voting="hard").fit(X, y),
+        StackingClassifier([("t", tree), ("l", logistic)]).fit(X, y),
+        BaggingClassifier(logistic, n_estimators=3, random_state=0).fit(X, y),
+        BaggingClassifier(tree, n_estimators=3, max_features=0.5, random_state=0).fit(X, y),
+        CalibratedClassifierCV(logistic, cv=2).fit(X, y),
+        TransformedTargetRegressor(LinearRegression(), func=np.cbrt, inverse_func=np.power, check_inverse=False).fit(X, y.astype(float)),
+        IsolationForest(n_estimators=3, random_state=0).fit(X),
+    ):
+        with pytest.raises(StructureError) as exc:
+            estimator_to_spec(estimator, feature_names=NAMES)
+        assert exc.value.code == "unsupported_estimator"
+
+
+def test_plain_averages_of_trees_stay_exact():
+    X, y = _sklearn_problem()
+    from sklearn.ensemble import BaggingClassifier, VotingClassifier
+    from sklearn.tree import DecisionTreeClassifier
+
+    tree = DecisionTreeClassifier(max_depth=2, random_state=0)
+    for estimator in (
+        VotingClassifier([("a", tree), ("b", DecisionTreeClassifier(max_depth=3, random_state=0))], voting="soft").fit(X, y),
+        BaggingClassifier(tree, n_estimators=3, random_state=0).fit(X, y),
+    ):
+        assert estimator_to_spec(estimator, feature_names=NAMES)["family"] == "ensemble"
+
+
+def test_large_averages_of_trees_upload_their_members_importances():
+    """Regression: bagging and voting have no ``feature_importances_``, so the summary was empty and
+    the API refused it with "importances must have one value per feature"."""
+    X, y = _sklearn_problem()
+    from sklearn.ensemble import BaggingClassifier
+    from sklearn.tree import DecisionTreeClassifier
+
+    bagging = BaggingClassifier(DecisionTreeClassifier(max_depth=2), n_estimators=31, random_state=0).fit(X, y)
+    spec = estimator_to_spec(bagging, feature_names=NAMES)
+    assert spec["family"] == "ensemble_summary"
+    assert spec["n_estimators"] == 31
+    assert len(spec["importances"]) == len(NAMES)
+    assert sum(spec["importances"]) == pytest.approx(1.0)
+
+
+def test_a_vendor_list_of_models_is_not_its_first_model():
+    class Linear:
+        coef_ = np.array([[1.0, -1.0]])
+        intercept_ = np.array([0.0])
+        n_features_in_ = 2
+
+    class VendorBlend:
+        def __init__(self):
+            self.models_ = [Linear(), Linear()]
+
+    with pytest.raises(StructureError) as exc:
+        estimator_to_spec(VendorBlend(), feature_names=["a", "b"])
+    assert exc.value.code == "unsupported_estimator"
+
+
+def test_linear_coefficients_under_another_output_are_drawn_not_run():
+    X, y = _sklearn_problem()
+    from sklearn.linear_model import (
+        LinearRegression,
+        LogisticRegression,
+        PoissonRegressor,
+        Ridge,
+        SGDClassifier,
+    )
+    from sklearn.svm import SVC
+
+    positive = np.abs(X[:, 0]) + 1
+    three = (X[:, 1] > 0).astype(int) + (X[:, 2] > 0).astype(int)
+    for estimator in (
+        PoissonRegressor().fit(X, positive),
+        SVC(kernel="linear", probability=True, random_state=0).fit(X, y),
+        SGDClassifier(loss="log_loss", random_state=0).fit(X, three),
+    ):
+        spec = estimator_to_spec(estimator, feature_names=NAMES)
+        assert spec["approximate"] is True
+        assert not spec_is_executable(spec)
+    for estimator in (
+        LogisticRegression().fit(X, y),
+        LogisticRegression().fit(X, three),
+        LinearRegression().fit(X, positive),
+        Ridge().fit(X, positive),
+    ):
+        spec = estimator_to_spec(estimator, feature_names=NAMES)
+        assert "approximate" not in spec
+        assert spec_is_executable(spec)
+
+
+def test_a_linear_layer_with_nothing_to_compare_stands():
+    class Linear:
+        coef_ = np.array([[1.0, -1.0]])
+        intercept_ = np.array([0.0])
+        n_features_in_ = 2
+
+        def predict(self, rows):
+            raise RuntimeError("needs a live session")
+
+    assert "approximate" not in estimator_to_spec(Linear(), feature_names=["a", "b"])
+
+
+def test_scalers_are_folded_as_sklearn_applies_them():
+    X, y = _sklearn_problem()
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import MinMaxScaler, StandardScaler
+
+    for scalers in (
+        [StandardScaler()],
+        [StandardScaler(with_mean=False)],
+        [StandardScaler(with_std=False)],
+        [StandardScaler(with_mean=False, with_std=False)],
+        [StandardScaler(), MinMaxScaler()],
+        [MinMaxScaler(), StandardScaler()],
+    ):
+        pipeline = make_pipeline(*scalers, LogisticRegression()).fit(X, y)
+        layer = next(item for item in estimator_to_spec(pipeline, feature_names=NAMES)["layers"] if item["type"] == "standardize")
+        folded = (X - np.asarray(layer["center"])) / np.asarray(layer["scale"])
+        np.testing.assert_allclose(folded, pipeline[:-1].transform(X))
+
+
+def test_a_scaler_in_front_of_a_forest_moves_every_tree():
+    X, y = _sklearn_problem()
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    pipeline = make_pipeline(StandardScaler(), RandomForestClassifier(3, max_depth=2, random_state=0)).fit(X, y)
+    spec = estimator_to_spec(pipeline, feature_names=NAMES)
+    assert spec["family"] == "ensemble" and len(spec["trees"]) == 3
+    bare = estimator_to_spec(pipeline[-1], feature_names=NAMES)
+    moved = [node for tree in spec["trees"] for node in tree["nodes"] if node.get("threshold") is not None]
+    still = [node for tree in bare["trees"] for node in tree["nodes"] if node.get("threshold") is not None]
+    assert moved and all(a["threshold"] != b["threshold"] for a, b in zip(moved, still))
+
+
 def test_wrapper_around_linear_is_extracted():
     class Linear:
         coef_ = np.array([[0.25, -0.5]])

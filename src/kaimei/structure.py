@@ -243,6 +243,8 @@ def cap_reference_rows(
 
 
 _EXACT_FAMILIES = {"network", "tree", "ensemble"}
+# These hold parts of a model, and any one part predicts differently from the whole.
+_PART_ATTRS = {"estimators_", "final_estimator_", "calibrated_classifiers_", "named_estimators_"}
 _WRAPPER_ATTRS = (
     "best_estimator_",
     "estimator_",
@@ -298,8 +300,8 @@ def estimator_to_spec(
     """Return a ``kaimei.structure.v1`` document with every tensor inline as JSON lists.
 
     Reads a known fitted shape (linear / MLP / tree / forest / Keras / Torch). If this
-    object is a wrapper around one of those, the inner estimator is used — no
-    vendor-specific package names required. For large models prefer
+    object is a wrapper around one of those and predicts as it does, the inner estimator
+    is used — no vendor-specific package names required. For large models prefer
     :func:`extract_structure`, which lifts big tensors out for binary upload.
     """
     return extract_structure(
@@ -360,7 +362,7 @@ def _extract_raw(
         names = [str(name) for name in feature_names]
     else:
         inferred: Optional[List[str]] = None
-        for candidate in candidates:
+        for candidate in _iter_estimators(estimator, parts=True):
             try:
                 inferred = _infer_names(candidate)
                 break
@@ -395,7 +397,9 @@ def _extract_raw(
             "Cannot read this estimator. Supported shapes: linear coefficients, MLP coefs_, "
             "a decision tree, a forest, a StandardScaler pipeline around those, a Keras / "
             "TensorFlow model, a torch.nn module, or an estimator with feature_importances_. "
-            "Wrappers around any of those are also accepted.",
+            "Wrappers around any of those are also accepted, unless they change the prediction: "
+            "voting, stacking, calibration and target transforms aren't read as their parts. "
+            "Those need a remote scoring URL or pre-computed attributions.",
             code="unsupported_estimator",
         )
     if framework is None:
@@ -451,8 +455,11 @@ def _direct_spec(
     return None
 
 
-def _iter_estimators(root: Any) -> List[Any]:
-    """Breadth-first walk of conventional wrapper attributes and fitted children."""
+def _iter_estimators(root: Any, parts: bool = False) -> List[Any]:
+    """Breadth-first walk of conventional wrapper attributes and fitted children.
+
+    Only what predicts as ``root`` does is walked, unless ``parts`` also asks for ensemble members.
+    """
     found: List[Any] = []
     queue: List[tuple] = [(root, 0)]
     seen = {id(root)}
@@ -461,7 +468,7 @@ def _iter_estimators(root: Any) -> List[Any]:
         found.append(current)
         if depth >= _MAX_UNWRAP_DEPTH:
             continue
-        for child in _child_estimators(current):
+        for child in _child_estimators(current, parts):
             marker = id(child)
             if marker in seen:
                 continue
@@ -470,11 +477,13 @@ def _iter_estimators(root: Any) -> List[Any]:
     return found
 
 
-def _child_estimators(estimator: Any) -> List[Any]:
+def _child_estimators(estimator: Any, parts: bool = False) -> List[Any]:
     children: List[Any] = []
     seen: set = set()
 
     def _add(value: Any) -> None:
+        if not parts and isinstance(value, (list, tuple, dict)):
+            return
         for item in _expand_estimator(value):
             marker = id(item)
             if marker in seen or item is estimator:
@@ -482,8 +491,14 @@ def _child_estimators(estimator: Any) -> List[Any]:
             seen.add(marker)
             children.append(item)
 
+    if not parts and str(type(estimator).__module__).startswith("sklearn."):
+        # sklearn's meta-estimators calibrate, transform or select around the estimator they hold,
+        # so it predicts differently from them. A search's best estimator and these two don't.
+        delegates = type(estimator).__name__ in {"RANSACRegressor", "SelfTrainingClassifier"}
+        _add(_safe_attr(estimator, "estimator_" if delegates else "best_estimator_"))
+        return children
     for name in _WRAPPER_ATTRS:
-        if name in _SKIP_UNWRAP_ATTRS:
+        if name in _SKIP_UNWRAP_ATTRS or (not parts and name in _PART_ATTRS):
             continue
         _add(_safe_attr(estimator, name))
     values = getattr(estimator, "__dict__", None)
@@ -576,6 +591,39 @@ def _is_pipeline(estimator: Any) -> bool:
     return isinstance(steps, (list, tuple)) and bool(steps)
 
 
+def _linear_layer_is_exact(estimator: Any, weight: Any, bias: Any, activation: Optional[str]) -> bool:
+    """Whether the estimator's own output is what ``weight`` and ``bias`` give under ``activation``.
+
+    Coefficients can sit under another link (a Poisson GLM) or other probabilities (Platt scaling,
+    one-vs-rest). An estimator with no comparable output has nothing to contradict the layer.
+    """
+    classifier = _classes(estimator) is not None
+    if classifier and activation is None:
+        return True
+    method = _safe_attr(estimator, "predict_proba" if classifier else "predict")
+    if not callable(method):
+        return True
+    sample = np.random.default_rng(0).normal(size=(8, weight.shape[1]))
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            actual = np.asarray(method(sample), dtype=float)
+    except Exception:
+        return True
+    score = sample @ weight.T + bias
+    if activation == "softmax":
+        shifted = np.exp(score - score.max(axis=1, keepdims=True))
+        expected = shifted / shifted.sum(axis=1, keepdims=True)
+    elif activation == "sigmoid":
+        expected = 1.0 / (1.0 + np.exp(-score))
+        actual = actual[:, -1:] if actual.ndim == 2 else actual
+    else:
+        expected = score
+    if actual.size != expected.size:
+        return False
+    return bool(np.allclose(actual.reshape(expected.shape), expected, rtol=1e-6, atol=1e-6))
+
+
 def _linear_to_spec(
     estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
 ) -> Dict[str, Any]:
@@ -616,6 +664,12 @@ def _linear_to_spec(
     if labels:
         spec["labels"] = labels
         spec["outputs"] = {"labels": labels}
+    if not _linear_layer_is_exact(estimator, weight, bias, activation):
+        spec["approximate"] = True
+        spec["summary"] = (
+            "Linear layer read from coef_ and intercept_. The estimator's output isn't that layer's, "
+            "so it is drawn, not run."
+        )
     return spec
 
 
@@ -718,9 +772,27 @@ def _tree_to_spec(
     return spec
 
 
+def _averages_its_trees(estimator: Any, width: int) -> bool:
+    """Whether the estimator predicts the plain mean of its members, which is how a forest spec runs."""
+    classes = {cls.__name__ for cls in type(estimator).__mro__}
+    if classes & {"ForestClassifier", "ForestRegressor"}:
+        return True
+    if classes & {"BaggingClassifier", "BaggingRegressor"}:
+        # Each member sees its own columns, which line up with the inputs only when all are kept in order.
+        columns = _safe_attr(estimator, "estimators_features_")
+        return columns is not None and all(np.array_equal(item, np.arange(width)) for item in columns)
+    if classes & {"VotingClassifier", "VotingRegressor"}:
+        return _safe_attr(estimator, "weights") is None and getattr(estimator, "voting", "soft") == "soft"
+    if classes & {"BaseEnsemble", "_BaseHeterogeneousEnsemble"}:
+        return False
+    return not str(type(estimator).__module__).startswith("sklearn.")
+
+
 def _forest_to_spec(
     estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
 ) -> Dict[str, Any]:
+    if not _averages_its_trees(estimator, len(names)):
+        raise StructureError("This ensemble is not a plain average of its members.", code="unsupported_estimator")
     members = []
     for member in estimator.estimators_:
         if hasattr(member, "tree_"):
@@ -753,6 +825,9 @@ def _forest_to_spec(
             "summary": f"Forest of {len(members)} trees.",
         }
     importances = np.asarray(getattr(estimator, "feature_importances_", []), dtype=float).ravel()
+    if not importances.size and all(hasattr(member, "feature_importances_") for member in members):
+        # Bagging and voting report none of their own. A forest's is this same mean over its trees.
+        importances = np.mean([member.feature_importances_ for member in members], axis=0)
     return {
         "format": "kaimei.structure.v1",
         "family": "ensemble_summary",
@@ -782,7 +857,8 @@ def _pipeline_to_spec(
                 code="unsupported_estimator",
                 param="steps",
             )
-        center, scale = found
+        # Two in a row fold into one: (x - a) / b, then (that - c) / d.
+        center, scale = found if center is None or scale is None else (center + scale * found[0], scale * found[1])
     assert center is not None and scale is not None
     final_estimator = final[1]
     spec = _extract_raw(final_estimator, names, task, framework)
@@ -790,9 +866,17 @@ def _pipeline_to_spec(
         _fold_scaler(spec["nodes"], center, scale)
         spec["summary"] = "Standardizer folded into the split thresholds, so the tree reads raw features."
         return spec
+    if spec.get("family") == "ensemble":
+        for tree in spec["trees"]:
+            _fold_scaler(tree["nodes"], center, scale)
+        count = len(spec["trees"])
+        spec["summary"] = f"Standardizer folded into the split thresholds, so all {count} trees read raw features."
+        return spec
+    if spec.get("family") == "ensemble_summary":
+        return spec  # Importances belong to the input columns, which a scaler doesn't reorder.
     if spec.get("family") not in {None, "network"}:
         raise StructureError(
-            "A scaler can precede a linear model, an MLP, or a single tree.",
+            "A scaler can precede a linear model, an MLP, a tree or a forest.",
             code="unsupported_estimator",
         )
     layers = list(spec["layers"])
@@ -813,7 +897,15 @@ def _pipeline_to_spec(
 
 def _scaler_arrays(step: Any) -> Optional[tuple]:
     if hasattr(step, "mean_") and hasattr(step, "scale_"):
-        return np.asarray(step.mean_, dtype=float), np.asarray(step.scale_, dtype=float)
+        # with_mean=False still fits mean_ but never subtracts it; with_std=False leaves scale_ empty.
+        fitted = step.mean_ if step.mean_ is not None else step.scale_
+        width = int(np.size(fitted)) if fitted is not None else int(step.n_features_in_)
+        keep_center = getattr(step, "with_mean", True) and step.mean_ is not None
+        keep_scale = getattr(step, "with_std", True) and step.scale_ is not None
+        return (
+            np.asarray(step.mean_, dtype=float) if keep_center else np.zeros(width),
+            np.asarray(step.scale_, dtype=float) if keep_scale else np.ones(width),
+        )
     if hasattr(step, "data_min_") and hasattr(step, "data_max_"):
         feature_range = tuple(getattr(step, "feature_range", (0, 1)))
         if feature_range != (0, 1):

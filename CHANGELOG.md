@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.2 — 2026-11-05
+
+### Fixed
+
+- **Models could upload as something they aren't, and report wrong numbers as exact.** The extractor
+  walked into fitted children and kept the first one that looked exact. A forest over 30 trees or
+  4,000 nodes, sklearn's default `RandomForestClassifier()` included, ran as its first tree. A
+  `VotingClassifier`, `BaggingClassifier` or a vendor's list of models ran as its first member, and
+  `CalibratedClassifierCV` and `TransformedTargetRegressor` ran without the step they add. A spec
+  is now read only from what predicts as the whole model does: large forests and boosted models
+  upload as importance summaries, and meta-estimators that change the prediction are refused with
+  an explanation. **Re-upload any model affected by this**: a stored spec keeps its old numbers.
+- AdaBoost, `IsolationForest`, and bagging over a subset of columns no longer run as a plain average
+  of their trees.
+- Linear models are checked against their own output, and any that disagree are drawn but not run:
+  `PoissonRegressor` and other non-identity links, `SVC(probability=True)`, and multiclass
+  `SGDClassifier`.
+- Scaler pipelines apply every scaler as sklearn does. Only the last of several scalers was kept, and
+  `StandardScaler(with_mean=False)` or `with_std=False` used the wrong centre or scale.
+
+### Added
+
+- `StandardScaler` or `MinMaxScaler` in front of a forest folds into every tree, so the pipeline
+  runs. It used to be refused.
+
+### Changed
+
+- `OneVsRestClassifier` is refused like other meta-estimators, even on a binary problem where its
+  single member would have matched.
+
 ## 0.7.1 — 2026-11-01
 
 ### Fixed

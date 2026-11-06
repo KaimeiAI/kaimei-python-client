@@ -129,11 +129,14 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](https://github.co
 | sklearn `MLPClassifier` / `MLPRegressor` | Exact layers | Yes |
 | sklearn tree | Full node list | Yes |
 | sklearn forest / extra trees | Trees if ≤30 estimators and ≤4,000 nodes; otherwise importances | Yes only when trees are inlined |
-| sklearn `Pipeline` + `StandardScaler` or `(0, 1)` `MinMaxScaler` | Scaler folded or inserted, then the estimator | Same as the final step |
+| sklearn `Pipeline` + `StandardScaler` or `(0, 1)` `MinMaxScaler`, one or several | Scaler folded or inserted, then the estimator | Same as the final step |
 | Keras / TensorFlow `Dense`, `Conv2D` (any stride, padding, dilation, groups), `DepthwiseConv2D`, `SeparableConv2D`, `BatchNormalization`, max / average / global pooling, `Add`, `Multiply`, `Concatenate`, `ZeroPadding2D`, `Rescaling`, `Normalization`, flatten, dropout, LayerNorm; functional graphs and nested base models | Layer weights and the layer graph | Yes, unless a layer is unrecognized (`approximate`) |
 | `torch.nn` CNNs: `Conv2d` (stride, padding, dilation, groups), `BatchNorm2d`, max / average / adaptive pooling, residual `+`, `torch.cat`, squeeze-excitation `*`, `Flatten`, `ReLU6` / `Hardswish` / `SiLU` and the other common activations (ResNet, MobileNet, EfficientNet, DenseNet, VGG, SqueezeNet) | Traced with `torch.fx`, so functional ops are kept | Yes; pass `input_shape=(C, H, W)` |
 | `torch.nn` `Linear`, common activations, Dropout, LayerNorm, Embedding, BatchNorm1d | Forward-hook order | Yes, unless a layer is unrecognized (`approximate`) |
-| Wrapper around any of the above (`model_`, `estimator_`, `best_estimator_`, `module`, …) | Same as the inner estimator | Same as the inner estimator |
+| Wrapper around any of the above that predicts as it does (`model_`, `estimator_`, `best_estimator_`, `module`, …) | Same as the inner estimator | Same as the inner estimator |
+| sklearn `AdaBoost*`, `GradientBoosting*` | `feature_importances_` summary | No — pass `inference` remote or attributions |
+| Models that change the prediction of what they hold (`Voting*` other than a soft, unweighted vote over trees, `Stacking*`, `Bagging*` over anything else, `CalibratedClassifierCV`, `TransformedTargetRegressor`, `OneVsRestClassifier`, `IsolationForest`) | Refused | No — register with `client.models.create` and an `inference` URL |
+| Linear coefficients under another output (`PoissonRegressor`, `SVC(probability=True)`, multiclass `SGDClassifier`) | Exact weights, marked `approximate` | No — pass `inference` remote or attributions |
 | XGBoost / LightGBM / CatBoost (sklearn API) | `feature_importances_` summary | No — pass `inference` remote or attributions |
 | ONNX, Hugging Face, LLMs | Framework label only | No |
 
