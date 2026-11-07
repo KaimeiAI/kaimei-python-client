@@ -13,7 +13,10 @@ Keep the conversion rules aligned with that file when you change either side.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
+import math
+import platform
 import warnings
 import zlib
 from dataclasses import dataclass, field
@@ -89,6 +92,19 @@ def spec_is_executable(spec: Mapping[str, Any]) -> bool:
     if spec.get("approximate") or spec.get("weights") == "summary":
         return False
     return str(spec.get("family") or "") in EXECUTABLE_FAMILIES
+
+
+def drawn_steps(spec: Mapping[str, Any]) -> List[str]:
+    """The steps of a spec Kaimei draws but cannot replay, as ``"<op> at <path>"``, members included."""
+    found: List[str] = []
+    for layer in spec.get("layers") or []:
+        if isinstance(layer, Mapping) and str(layer.get("type") or "") == "opaque":
+            where = str(layer.get("path") or layer.get("id") or "?")
+            found.append(f"{layer.get('reason') or layer.get('op') or 'step'} at {where}")
+    for member in spec.get("members") or []:
+        if isinstance(member, Mapping):
+            found.extend(drawn_steps(member))
+    return found
 
 
 def spec_payload_bytes(spec: Mapping[str, Any]) -> int:
@@ -212,26 +228,18 @@ def finalize_spec(
                 value = layer.get(key)
                 if value is None:
                     continue
-                if isinstance(value, Mapping):
-                    if weights == "summary" and "$tensor" in value:
-                        known = (tensors or {}).get(str(value["$tensor"]))
-                        shape = list(value.get("shape") or getattr(known, "shape", None) or ())
-                        ghost: Dict[str, Any] = {"$shape": [int(dim) for dim in shape] or [1], "dtype": "f32"}
-                        if known is not None and _stats_say_little(key, known):
-                            ghost["stats"] = tensor_stats(known)
-                        layer[key] = ghost
-                    continue
-                array = numpy.asarray(value, dtype=float)
-                if weights == "summary":
-                    layer[key] = {"$shape": [int(dim) for dim in array.shape] or [1], "dtype": "f32"}
-                    if _stats_say_little(key, array):
-                        layer[key]["stats"] = tensor_stats(array)
-                elif externalize_above is not None and array.size > externalize_above:
-                    tensor_key = f"{prefix}{layer_id}.{key}"
-                    lifted[tensor_key] = numpy.ascontiguousarray(array, dtype=numpy.float32)
-                    layer[key] = {"$tensor": tensor_key, "shape": [int(dim) for dim in array.shape], "dtype": "f32"}
-                else:
-                    layer[key] = array.tolist() if array.ndim else float(array)
+                layer[key] = _finalize_tensor(
+                    value, key, f"{prefix}{layer_id}.{key}", weights, externalize_above, tensors, lifted, numpy
+                )
+            params = layer.get("params")
+            if isinstance(params, Mapping):
+                # An opaque step's tensors, named as its framework names them.
+                layer["params"] = {
+                    str(name): _finalize_tensor(
+                        value, str(name), f"{prefix}{layer_id}.{name}", weights, externalize_above, tensors, lifted, numpy
+                    )
+                    for name, value in params.items()
+                }
             finalized.append(layer)
         out["layers"] = finalized
     if hasattr(out.get("importances"), "tolist"):
@@ -257,9 +265,42 @@ def finalize_spec(
     return Extraction(spec=out, tensors=lifted)
 
 
+def _finalize_tensor(
+    value: Any,
+    key: str,
+    tensor_key: str,
+    weights: str,
+    externalize_above: Optional[int],
+    tensors: Optional[Mapping[str, Any]],
+    lifted: Dict[str, Any],
+    numpy: Any,
+) -> Any:
+    """One tensor of a layer as the spec sends it: a JSON list, a binary reference, or a ghost."""
+    if isinstance(value, Mapping):
+        if weights == "summary" and "$tensor" in value:
+            known = (tensors or {}).get(str(value["$tensor"]))
+            shape = list(value.get("shape") or getattr(known, "shape", None) or ())
+            ghost: Dict[str, Any] = {"$shape": [int(dim) for dim in shape] or [1], "dtype": "f32"}
+            if known is not None and _stats_say_little(key, known):
+                ghost["stats"] = tensor_stats(known)
+            return ghost
+        return value
+    array = numpy.asarray(value, dtype=float)
+    if weights == "summary":
+        ghost = {"$shape": [int(dim) for dim in array.shape] or [1], "dtype": "f32"}
+        if _stats_say_little(key, array):
+            ghost["stats"] = tensor_stats(array)
+        return ghost
+    if externalize_above is not None and array.size > externalize_above:
+        lifted[tensor_key] = numpy.ascontiguousarray(array, dtype=numpy.float32)
+        return {"$tensor": tensor_key, "shape": [int(dim) for dim in array.shape], "dtype": "f32"}
+    return array.tolist() if array.ndim else float(array)
+
+
 def _stats_say_little(key: str, array: Any) -> bool:
     """Whether a tensor's statistics can go with it. On a few values they are the values, and a scaler's are its data."""
-    return key in {"weight", "bias", "gamma", "beta"} and int(getattr(array, "size", 0)) >= MIN_VALUES_FOR_STATS
+    learned = key in {"weight", "bias", "gamma", "beta"} or key.endswith(("weight", "bias", "_proj", "embedding"))
+    return learned and int(getattr(array, "size", 0)) >= MIN_VALUES_FOR_STATS
 
 
 def _split_counts(spec: Mapping[str, Any], counts: Dict[str, int], tensors: Optional[Mapping[str, Any]]) -> int:
@@ -427,6 +468,7 @@ def estimator_to_spec(
     framework: Optional[str] = None,
     input_shape: Optional[Sequence[int]] = None,
     preprocess: Optional[Mapping[str, Any]] = None,
+    on_unsupported: str = "draw",
 ) -> Dict[str, Any]:
     """Return a ``kaimei.structure.v1`` document with every tensor inline as JSON lists.
 
@@ -443,6 +485,7 @@ def estimator_to_spec(
         externalize_above=None,
         input_shape=input_shape,
         preprocess=preprocess,
+        on_unsupported=on_unsupported,
     ).spec
 
 
@@ -457,6 +500,8 @@ def extract_structure(
     input_shape: Optional[Sequence[int]] = None,
     preprocess: Optional[Mapping[str, Any]] = None,
     check_rows: Any = None,
+    on_unsupported: str = "draw",
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> Extraction:
     """Read a fitted estimator into a spec plus the tensors to upload as binary.
 
@@ -471,8 +516,28 @@ def extract_structure(
     for Keras (read from the model when built). ``preprocess`` prepends a per-channel
     ``normalize`` layer, e.g. ``{"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}``
     for a torchvision model that expects ``Normalize`` on ``[0, 1]`` pixels.
+
+    A layer or operation Kaimei cannot replay (attention, a matmul, a reshape) becomes an ``opaque``
+    step: drawn from its name, attributes, output shape and tensors, never run, and the whole model
+    is then drawn rather than run. ``on_unsupported="error"`` raises ``unsupported_layers`` instead.
+
+    The spec records where it came from (the model's class, the framework and its version, this client's
+    version and when); ``metadata`` adds your own entries to that, e.g. ``{"training_run": "exp-42"}``.
     """
+    if on_unsupported not in {"draw", "error"}:
+        raise StructureError("on_unsupported must be 'draw' or 'error'.", code="invalid_structure", param="on_unsupported")
     raw = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess, check_rows)
+    if metadata:
+        raw["metadata"] = {**raw.get("metadata", {}), **{str(key): value for key, value in metadata.items()}}
+    if on_unsupported == "error":
+        drawn = drawn_steps(raw)
+        if drawn:
+            listed = "; ".join(drawn[:6]) + ("; …" if len(drawn) > 6 else "")
+            raise StructureError(
+                f"This model uses operations Kaimei cannot replay yet: {listed}. Register it with a remote "
+                "inference endpoint instead, or let on_unsupported='draw' draw them.",
+                code="unsupported_layers",
+            )
     extraction = finalize_spec(raw, weights=weights, externalize_above=externalize_above)
     if externalize_above == EXTERNALIZE_ABOVE and spec_payload_bytes(extraction.spec) >= WARN_STRUCTURE_BYTES:
         # A CNN holds dozens of kernels under the default threshold (MobileNetV2: 16 MB of JSON).
@@ -493,7 +558,47 @@ def _extract_raw(
     """The spec with tensors still as numpy arrays (see :func:`finalize_spec`), checked against the estimator."""
     spec = _read_estimator(estimator, feature_names, task, framework, input_shape, preprocess)
     _keep_layers_apart_from_features(spec)
+    spec["metadata"] = {**extraction_metadata(estimator, spec), **dict(spec.get("metadata") or {})}
     return _checked(spec, estimator, check_rows)
+
+
+#: Where a framework keeps its version, by the name :func:`detect_framework` gives it.
+_FRAMEWORK_MODULES = {
+    "sklearn": "sklearn",
+    "pytorch": "torch",
+    "keras": "keras",
+    "tensorflow": "tensorflow",
+    "xgboost": "xgboost",
+    "lightgbm": "lightgbm",
+    "catboost": "catboost",
+}
+
+
+def extraction_metadata(estimator: Any, spec: Mapping[str, Any]) -> Dict[str, Any]:
+    """What a reader wants to know about where a spec came from: the class, the framework and its version,
+    the Python, this client's version and when. Plain JSON; the API keeps it on the structure document."""
+    from .client import __version__
+
+    found: Dict[str, Any] = {
+        "extracted_with": f"kaimei-python-client {__version__}",
+        "extracted_at": _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "python": platform.python_version(),
+    }
+    cls = type(estimator)
+    found["model_class"] = f"{cls.__module__}.{cls.__qualname__}" if cls.__module__ != "builtins" else cls.__qualname__
+    framework = str(spec.get("framework") or detect_framework(estimator) or "")
+    module_name = _FRAMEWORK_MODULES.get(framework)
+    if module_name:
+        try:
+            version = getattr(__import__(module_name), "__version__", None)
+        except Exception:  # noqa: BLE001 - an importable-but-broken framework is not this function's problem
+            version = None
+        if version:
+            found["framework_version"] = str(version)
+    doc = (getattr(cls, "__doc__", None) or "").strip().splitlines()
+    if doc and doc[0].strip() and cls.__module__ != "builtins":
+        found["description"] = doc[0].strip()[:200]
+    return found
 
 
 def _keep_layers_apart_from_features(spec: Dict[str, Any]) -> None:
@@ -1399,7 +1504,8 @@ _TORCH_FUNCTIONS = {
     "hardsigmoid": "hardsigmoid",
     "hardsigmoid_": "hardsigmoid",
 }
-#: Calls that return their input unchanged at inference.
+#: Calls that return their input unchanged at inference (casts and moves included: Kaimei runs in
+#: float64 whatever the model's dtype, and its inputs are finite, so nan_to_num has nothing to do).
 _TORCH_PASSTHROUGH = {
     "dropout",
     "dropout2d",
@@ -1407,8 +1513,16 @@ _TORCH_PASSTHROUGH = {
     "clone",
     "detach",
     "float",
+    "double",
+    "half",
+    "bfloat16",
     "to",
     "type_as",
+    "cpu",
+    "cuda",
+    "requires_grad_",
+    "nan_to_num",
+    "nan_to_num_",
     "alpha_dropout",
 }
 #: Calls that compute shapes or indices, never activations.
@@ -1638,11 +1752,14 @@ def _torch_to_spec(
     if names:
         example = torch.zeros(1, len(names))
     seen: List[str] = []
+    outputs: Dict[str, Optional[List[int]]] = {}
     handles = []
 
     def _hook(name: str):
-        def _record(_module: Any, _inputs: Any, _output: Any) -> None:
+        def _record(_module: Any, _inputs: Any, output: Any) -> None:
             seen.append(name)
+            # What each leaf gives, so a module Kaimei cannot replay is still drawn at its true width.
+            outputs[name] = list(output.shape)[1:] if hasattr(output, "shape") else None
 
         return _record
 
@@ -1669,20 +1786,13 @@ def _torch_to_spec(
         if module is None:
             continue
         uses[name] = uses.get(name, 0) + 1
+        # A layer called twice is two steps of the same weights, and each step needs its own node.
+        step = name if uses[name] == 1 else f"{name}.{uses[name]}"
         try:
-            # A layer called twice is two steps of the same weights, and each step needs its own node.
-            layers.extend(_torch_module_layers(name if uses[name] == 1 else f"{name}.{uses[name]}", module, None))
-        except _Unsupported:
+            layers.extend(_torch_module_layers(step, module, None))
+        except _Unsupported as exc:
             unsupported = True
-            layers.append(
-                {
-                    "id": _safe_id(name),
-                    "path": name,
-                    "type": "dropout",
-                    "label": type(module).__name__,
-                    "rate": 0,
-                }
-            )
+            layers.append(_opaque_module(step, module, outputs.get(name), str(exc)))
     if not _layers_line_up(layers, len(names)):
         raise StructureError(
             "This model's forward() gives a layer something other than the layer before it, in a way Kaimei can't "
@@ -1698,8 +1808,7 @@ def _torch_to_spec(
         "task": resolved,
         "feature_names": names,
         "summary": "PyTorch module read in forward-hook order. Module names group the layers into blocks."
-        if not unsupported
-        else "PyTorch module read in forward-hook order. Unrecognised layers are passed through.",
+        + _drawn_note(layers),
         "layers": layers,
     }
     if labels:
@@ -1757,6 +1866,7 @@ def _torch_image_spec(
     )
     if added:
         summary += f" A {added} turns the final logits into probabilities."
+    summary += _drawn_note(layers)
     spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
@@ -1790,26 +1900,27 @@ def _torch_traced_tabular(
         body, approximate, final_shape = _torch_fx_layers(module, torch.zeros(2, len(names)), "input", torch)
     except (_Untraceable, StructureError):
         return None
-    if approximate or not body:
+    if not body:
         return None
     previous = "input"
     layers: List[Dict[str, Any]] = [{"id": "input", "type": "input", "names": names}]
     for layer in body:
-        sources = list(layer.get("inputs") or [previous])
+        sources = list(layer.get("inputs") or []) if "inputs" in layer else [previous]
         item = {key: value for key, value in layer.items() if key != "inputs"}
         if sources != [previous]:
             item["inputs"] = sources
         layers.append(item)
-        previous = str(layer.get("id"))
+        previous = _out(layer)
     resolved, labels, added = _classification_head(layers, task, final_shape)
     summary = "PyTorch module traced op by op."
     if added:
         summary += f" A {added} turns the final logits into probabilities."
+    summary += _drawn_note(layers)
     spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
         "framework": framework or "pytorch",
-        "architecture": "mlp",
+        "architecture": "mlp" if not approximate else "network",
         "task": resolved,
         "feature_names": names,
         "summary": summary,
@@ -1818,6 +1929,8 @@ def _torch_traced_tabular(
     if labels:
         spec["labels"] = labels
         spec["outputs"] = {"labels": labels}
+    if approximate:
+        spec["approximate"] = True
     return spec
 
 
@@ -1839,15 +1952,20 @@ def _torch_fx_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tu
     layers: List[Dict[str, Any]] = []
     taken: set = {"input", entry}
     approximate = False
-    problems: List[str] = []
-    failed: set = set()
     final: Optional[str] = None
     final_shape: Optional[List[int]] = None
 
     def tensor_shape(node: Any) -> Optional[List[int]]:
         meta = node.meta.get("tensor_meta") if hasattr(node, "meta") else None
+        if isinstance(meta, (list, tuple)) and not hasattr(meta, "shape"):
+            # A step returning several tensors (attention and its weights) is read by its first.
+            meta = next((item for item in meta if hasattr(item, "shape")), None)
         shape = getattr(meta, "shape", None)
-        return [int(dim) for dim in shape][1:] if shape is not None else None
+        if shape is None:
+            return None
+        # A stored tensor has no batch axis to drop; a computed one does.
+        dims = [int(dim) for dim in shape]
+        return dims if node.op == "get_attr" else dims[1:]
 
     def unique(raw: str) -> str:
         base = _safe_id(raw)
@@ -1872,15 +1990,10 @@ def _torch_fx_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tu
             result = node.args[0]
             if isinstance(result, (list, tuple)):
                 result = result[0]
-            if hasattr(result, "name") and result.name in failed:
-                continue  # the unsupported op upstream is what gets reported
             if isinstance(result, dict) or not hasattr(result, "name") or result.name not in produced:
                 raise StructureError("The model must return one tensor.", code="invalid_structure")
             final = produced[result.name]
             final_shape = shapes.get(result.name)
-            continue
-        if any(arg.name in failed for arg in _fx_args(node)):
-            failed.add(node.name)  # downstream of an op already reported
             continue
         out_shape = tensor_shape(node)
         inputs = [arg for arg in _fx_args(node) if hasattr(arg, "name") and arg.name in produced]
@@ -1899,21 +2012,23 @@ def _torch_fx_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tu
                 converted = _torch_module_layers(path, modules[node.target], in_shapes[0] if in_shapes else None)
             elif node.op in ("call_function", "call_method"):
                 converted = _torch_call_layers(node, in_shapes, out_shape)
+                if not converted and not sources:
+                    raise _Unsupported("a tensor made here")  # an identity of nothing Kaimei computed
+            elif node.op == "get_attr":
+                raise _Unsupported("a stored tensor")
             else:
                 raise _Unsupported(f"{node.op} {node.target}")
         except _Unsupported as exc:
-            if len(sources) == 1 and in_shapes[0] == out_shape:
-                approximate = True
-                converted = [{"type": "dropout", "rate": 0, "label": f"{exc} (not replayed)"}]
+            # Drawn from its name, attributes, output shape and tensors; the model is then drawn, not run.
+            approximate = True
+            if node.op == "call_module":
+                converted = [_opaque_module(path, modules[node.target], out_shape, str(exc))]
+            elif node.op == "get_attr":
+                converted = [_opaque_constant(_fx_attr(traced, node.target), out_shape)]
             else:
-                problems.append(f"{exc} at {path}")
-                failed.add(node.name)
-                continue
+                converted = [_opaque_call(node, out_shape, str(exc))]
+            sources = list(dict.fromkeys(sources))  # self-attention reads one tensor three times: one edge
         if not converted:
-            if not sources:
-                problems.append(f"{node.target} at {path}")
-                failed.add(node.name)
-                continue
             produced[node.name] = sources[0]
             shapes[node.name] = out_shape
             paths[node.name] = paths.get(inputs[0].name, path)
@@ -1930,14 +2045,6 @@ def _torch_fx_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tu
         produced[node.name] = previous[0]
         shapes[node.name] = out_shape
         paths[node.name] = path
-    if problems:
-        listed = "; ".join(problems[:6]) + ("; …" if len(problems) > 6 else "")
-        raise StructureError(
-            "This model uses operations Kaimei cannot replay yet: "
-            f"{listed}. Register it with a remote inference endpoint instead; image explanations then use "
-            "occlusion and LIME.",
-            code="unsupported_layers",
-        )
     if final is None:
         raise StructureError("The traced model has no output.", code="invalid_structure")
     if not layers or _out(layers[-1]) != final:
@@ -2019,7 +2126,7 @@ def _torch_call_layers(node: Any, in_shapes: List[Optional[List[int]]], out_shap
         if rank is None or dim not in (1, -rank):
             raise _Unsupported(f"cat along dim {dim}")
         return [{"type": "concat"}] if tensors > 1 else []
-    if name in ("flatten", "view", "reshape", "squeeze", "unsqueeze"):
+    if name in ("flatten", "view", "reshape", "squeeze", "unsqueeze", "view_as", "reshape_as"):
         if name == "flatten" and int(_arg(node, 1, "start_dim", 0)) != 1:
             raise _Unsupported("flatten that merges the batch axis")
         in_shape = in_shapes[0] if in_shapes else None
@@ -2117,6 +2224,157 @@ def _torch_arithmetic(
     raise _Unsupported(f"{name} with a constant")
 
 
+#: How many entries of a list an opaque step's attribute keeps, how long a string may be, how deep
+#: nesting may go, and how many bytes the whole set may take (the API's limit).
+_ATTR_ITEMS = 64
+_ATTR_CHARS = 200
+_ATTR_DEPTH = 8
+MAX_OPAQUE_ATTR_BYTES = 16_384
+
+
+def _attr_value(value: Any, depth: int = 0) -> Any:
+    """``value`` as plain JSON for an opaque step's attributes, or ``None`` when it has no JSON form."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value[:_ATTR_CHARS]
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else str(value)
+    if hasattr(value, "op") and hasattr(value, "name") and hasattr(value, "meta"):
+        return f"${value.name}"  # a tensor computed earlier, named by the step that made it
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        return None  # a tensor travels as a parameter, not an attribute
+    if depth >= _ATTR_DEPTH:
+        return None
+    if isinstance(value, (list, tuple)) or type(value).__name__ == "Size":
+        items = [_attr_value(item, depth + 1) for item in list(value)[:_ATTR_ITEMS]]
+        return items if all(item is not None for item in items) else None
+    if isinstance(value, dict):
+        kept = {str(key): _attr_value(item, depth + 1) for key, item in list(value.items())[:_ATTR_ITEMS]}
+        return {key: item for key, item in kept.items() if item is not None}
+    if type(value).__module__.split(".")[0] == "torch" and type(value).__name__ in ("dtype", "device", "memory_format", "layout"):
+        return str(value)
+    return None
+
+
+def _module_attrs(module: Any) -> Dict[str, Any]:
+    """A module's configuration: its plain public attributes, and what it prints about itself."""
+    attrs: Dict[str, Any] = {}
+    for key, value in vars(module).items():
+        if key.startswith("_") or key == "training" or callable(value):
+            continue
+        plain = _attr_value(value)
+        if plain is not None:
+            attrs[key] = plain
+        if len(attrs) >= _ATTR_ITEMS:
+            break
+    try:
+        printed = str(module.extra_repr() or "")
+    except Exception:
+        printed = ""
+    if printed:
+        attrs.setdefault("repr", printed[:_ATTR_CHARS])
+    return attrs
+
+
+def _module_tensors(module: Any) -> Dict[str, Any]:
+    """Every parameter and buffer below a module, by its dotted name."""
+    tensors: Dict[str, Any] = {}
+    for name, value in list(module.named_parameters(recurse=True)) + list(module.named_buffers(recurse=True)):
+        try:
+            tensors[str(name)] = _arr(value)
+        except (TypeError, ValueError):
+            continue  # a complex or otherwise non-numeric buffer
+    return tensors
+
+
+def _opaque_module(name: str, module: Any, out_shape: Optional[Sequence[int]], reason: str) -> Dict[str, Any]:
+    """A module Kaimei cannot replay, drawn from its class, configuration, output shape and tensors."""
+    layer: Dict[str, Any] = {
+        "id": _safe_id(name),
+        "path": name,
+        "label": name,
+        "type": "opaque",
+        "op": type(module).__name__,
+        "reason": reason,
+        "attrs": _fit_attrs(_module_attrs(module)),
+    }
+    if out_shape is not None:
+        layer["shape"] = _hwc(list(out_shape)) or [1]
+    tensors = _module_tensors(module)
+    if tensors:
+        layer["params"] = tensors
+    return layer
+
+
+def _opaque_call(node: Any, out_shape: Optional[Sequence[int]], reason: str) -> Dict[str, Any]:
+    """A functional op Kaimei cannot replay, drawn from its name, arguments and output shape."""
+    attrs: Dict[str, Any] = {}
+    positional = [_attr_value(arg) for arg in node.args]
+    if any(item is not None for item in positional):
+        attrs["args"] = [item if item is not None else "…" for item in positional]
+    for key, value in node.kwargs.items():
+        plain = _attr_value(value)
+        if plain is not None:
+            attrs[str(key)] = plain
+    name = _call_name(node)
+    layer: Dict[str, Any] = {"type": "opaque", "op": name, "label": name, "reason": reason, "attrs": _fit_attrs(attrs)}
+    if out_shape is not None:
+        layer["shape"] = _hwc(list(out_shape)) or [1]  # a scalar result is one value
+    return layer
+
+
+def _opaque_constant(value: Any, shape: Optional[Sequence[int]]) -> Dict[str, Any]:
+    """A tensor the model stores and reads in its forward pass, drawn as a step with no inputs.
+
+    ``shape`` is the tensor's own shape (no batch axis, no picture convention): a buffer is what it is.
+    """
+    layer: Dict[str, Any] = {"type": "opaque", "op": "constant", "label": "constant", "reason": "a stored tensor", "attrs": {}}
+    if shape is not None:
+        layer["shape"] = [int(dim) for dim in shape] or [1]
+    try:
+        layer["params"] = {"value": _arr(value)}
+    except (TypeError, ValueError):
+        pass
+    return layer
+
+
+def _fit_attrs(attrs: Dict[str, Any]) -> Dict[str, Any]:
+    """Attributes within the API's size limit: the largest entries go first, and ``repr`` stays."""
+    size = lambda value: len(json.dumps(value, default=str))  # noqa: E731
+    while size(attrs) > MAX_OPAQUE_ATTR_BYTES:
+        biggest = max((key for key in attrs if key != "repr"), key=lambda key: size(attrs[key]), default=None)
+        if biggest is None:
+            attrs["repr"] = str(attrs.get("repr", ""))[:_ATTR_CHARS]
+            break
+        del attrs[biggest]
+    return attrs
+
+
+def _fx_attr(root: Any, target: str) -> Any:
+    """The parameter or buffer a ``get_attr`` node reads, by its dotted path."""
+    value = root
+    for part in str(target).split("."):
+        value = getattr(value, part)
+    return value
+
+
+def _drawn_note(layers: List[Dict[str, Any]]) -> str:
+    """For a spec summary: how many steps are drawn but not replayed, and which."""
+    drawn = [layer for layer in layers if layer.get("type") == "opaque"]
+    if not drawn:
+        return ""
+    names = list(dict.fromkeys(str(layer.get("op") or layer.get("label") or "step") for layer in drawn))
+    listed = ", ".join(names[:5]) + (", …" if len(names) > 5 else "")
+    steps = "step" if len(drawn) == 1 else "steps"
+    return (
+        f" {len(drawn)} {steps} Kaimei cannot replay ({listed}) are drawn from their shapes and attributes, "
+        "so the model is drawn, not run."
+    )
+
+
 def _torch_hook_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tuple:
     """Fallback for untraceable modules: leaf modules in call order, shapes from hooks."""
     calls: List[tuple] = []
@@ -2153,10 +2411,8 @@ def _torch_hook_layers(estimator: Any, example: Any, entry: str, torch: Any) -> 
             previous = layers[-1]["id"]
         try:
             converted = _torch_module_layers(name, module, in_shape)
-        except _Unsupported:
-            converted = [
-                {"id": _safe_id(name), "path": name, "type": "dropout", "rate": 0, "label": type(module).__name__}
-            ]
+        except _Unsupported as exc:
+            converted = [_opaque_module(name, module, out_shape, str(exc))]
         for layer in converted:
             layer = dict(layer)
             layer["inputs"] = [previous]
@@ -2210,6 +2466,9 @@ def _classification_head(layers: List[Dict[str, Any]], task: Optional[str], fina
     last = layers[-1] if layers else {}
     # Dropout does nothing here, so what comes before it says what the output is.
     shown: Dict[str, Any] = next((layer for layer in reversed(layers) if layer.get("type") != "dropout"), {})
+    if shown.get("type") == "opaque":
+        # The model ends in a step Kaimei only draws: nothing is read off it, so no head is added to it.
+        return task or "regression", None, None
     act = shown.get("activation") if shown.get("type") in ("dense", "conv2d", "activation") else None
     width = int(np.prod(final_shape)) if final_shape else _output_width(layers)
     resolved = task
@@ -2526,13 +2785,6 @@ def _keras_to_spec(
     outputs = _keras_emit_model(estimator, [entry], "", state)
     if len(outputs) != 1:
         raise StructureError("Keras models with more than one output are not supported.", code="invalid_structure")
-    if state.problems:
-        listed = "; ".join(state.problems[:6]) + ("; …" if len(state.problems) > 6 else "")
-        raise StructureError(
-            f"This model uses layers Kaimei cannot replay yet: {listed}. Register it with a remote "
-            "inference endpoint instead; image explanations then use occlusion and LIME.",
-            code="unsupported_layers",
-        )
     if _out(layers[-1]) != outputs[0]:
         layers.append({"id": "output", "type": "dropout", "rate": 0, "label": "Output", "inputs": [outputs[0]]})
     conv = any(layer.get("type") == "conv2d" for layer in layers)
@@ -2559,7 +2811,9 @@ def _keras_to_spec(
             layers[-1]["output_labels"] = classes
     if state.approximate:
         spec["approximate"] = True
-        spec["summary"] = "Keras / TensorFlow model read from layer weights. Unrecognised layers are passed through."
+        spec["summary"] = "Keras / TensorFlow model read from layer weights." + (
+            _drawn_note(layers) or " Its exact GELU runs as the tanh form, so it is drawn, not run."
+        )
     return spec
 
 
@@ -2567,7 +2821,6 @@ class _KerasState:
     def __init__(self, layers: List[Dict[str, Any]]):
         self.layers = layers
         self.taken = {layer["id"] for layer in layers}
-        self.problems: List[str] = []
         self.approximate = False
         self.graph = False
 
@@ -2689,12 +2942,9 @@ def _keras_emit_layer(layer: Any, sources: List[str], prefix: str, state: _Keras
     else:
         reason = kind
     if converted is None:
-        if len(sources) == 1 and _keras_keeps_shape(layer):
-            state.approximate = True
-            converted = [{"id": name, "type": "dropout", "rate": 0, "label": f"{kind} (not replayed)"}]
-        else:
-            state.problems.append(f"{reason} ({prefix}{name})")
-            return sources[:1]
+        # Drawn from its class, configuration, output shape and weights; the model is then drawn, not run.
+        state.approximate = True
+        converted = [_opaque_keras(layer, kind, reason)]
     if not converted:
         return sources[:1]
     if any(item.get("activation") == "gelu" for item in converted):
@@ -2710,11 +2960,56 @@ def _keras_emit_layer(layer: Any, sources: List[str], prefix: str, state: _Keras
     return previous
 
 
-def _keras_keeps_shape(layer: Any) -> bool:
+def _opaque_keras(layer: Any, kind: str, reason: str) -> Dict[str, Any]:
+    """A Keras layer Kaimei cannot replay, drawn from its class, configuration, output shape and weights."""
+    name = str(getattr(layer, "name", kind))
+    attrs: Dict[str, Any] = {}
     try:
-        return tuple(layer.input.shape) == tuple(layer.output.shape)
+        config = dict(layer.get_config() or {})
     except Exception:
-        return False
+        config = {}
+    for key, value in config.items():
+        if key in ("name", "trainable"):
+            continue
+        plain = _attr_value(value)
+        if plain is not None:
+            attrs[str(key)] = plain
+    spec: Dict[str, Any] = {"id": name, "path": name, "label": name, "type": "opaque", "op": kind, "reason": reason, "attrs": _fit_attrs(attrs)}
+    try:
+        shape = [int(dim) for dim in list(layer.output.shape)[1:]]
+        if shape and min(shape) > 0:
+            spec["shape"] = shape
+    except Exception:
+        pass  # a layer that was never called has no output
+    try:
+        names = _keras_weight_names(layer)
+        values = [np.asarray(value, dtype=float) for value in layer.get_weights()]
+    except Exception:
+        names, values = [], []
+    if names and len(names) == len(values):
+        spec["params"] = {name: value for name, value in zip(names, values)}
+    return spec
+
+
+def _keras_weight_names(layer: Any) -> List[str]:
+    """Each weight by its path inside the layer (``query.kernel``), unique, without the layer's own prefix.
+
+    Keras 3 keeps the path on ``weight.path`` and only the leaf on ``weight.name``; tf.keras 2 puts the
+    path, with a ``:0``, on ``name``. Attention has eight weights that would otherwise all read ``kernel``.
+    """
+    prefix = f"{getattr(layer, 'name', '')}/"
+    names: List[str] = []
+    for weight in layer.weights:
+        raw = str(getattr(weight, "path", None) or getattr(weight, "name", "") or "weight")
+        if raw.startswith(prefix):
+            raw = raw[len(prefix) :]
+        raw = raw.split(":")[0].replace("/", ".") or "weight"
+        name, k = raw, 1
+        while name in names:
+            k += 1
+            name = f"{raw}_{k}"
+        names.append(name)
+    return names
 
 
 def _keras_weights(layer: Any, node_id: str) -> List[Any]:

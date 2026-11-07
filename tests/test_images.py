@@ -121,7 +121,7 @@ def test_torch_cnn_uploads_as_an_image_model():
     assert np.asarray(reference["rows"][0]["image"]).shape == (8, 8, 3)
 
 
-def test_torch_cnn_needs_an_input_shape_and_refuses_unknown_ops():
+def test_torch_cnn_needs_an_input_shape_and_draws_unknown_ops():
     torch = pytest.importorskip("torch")
     from torch import nn
 
@@ -137,8 +137,16 @@ def test_torch_cnn_needs_an_input_shape_and_refuses_unknown_ops():
 
     with pytest.raises(StructureError, match="input_shape"):
         estimator_to_spec(Shuffle())
+    # The channel shuffle cannot be replayed, so its three steps are drawn and the model is not run.
+    spec = estimator_to_spec(Shuffle(), input_shape=(4, 6, 6))
+    assert spec["approximate"] is True
+    drawn = [layer for layer in spec["layers"] if layer["type"] == "opaque"]
+    assert [layer["op"] for layer in drawn] == ["view", "transpose", "reshape"]
+    assert drawn[0]["shape"] == [2, 2, 6, 6] and drawn[1]["attrs"]["args"][1:] == [1, 2]
+    assert drawn[2]["shape"] == [6, 6, 4]  # back to a picture, height × width × channels
+    assert spec["layers"][-1]["type"] == "flatten" and spec["layers"][-1]["inputs"] == [drawn[2]["id"]]
     with pytest.raises(StructureError) as caught:
-        estimator_to_spec(Shuffle(), input_shape=(4, 6, 6))
+        estimator_to_spec(Shuffle(), input_shape=(4, 6, 6), on_unsupported="error")
     assert caught.value.code == "unsupported_layers"
 
 

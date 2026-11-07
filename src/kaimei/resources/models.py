@@ -199,6 +199,7 @@ class Models(Resource):
         input_shape: Optional[Sequence[int]] = None,
         preprocess: Optional[Mapping[str, Any]] = None,
         value_range: Optional[Sequence[float]] = None,
+        on_unsupported: str = "draw",
     ):
         """Register a fitted estimator and upload its layers and learned weights.
 
@@ -222,6 +223,10 @@ class Models(Resource):
         Summaries and approximate nets need ``inference={"type": "remote", "url": "..."}``
         or pre-computed attributions. ``progress(stage, done, total)`` is called while
         tensors upload.
+
+        Layers and operations Kaimei cannot replay (attention, matmul, reshapes) are drawn
+        from their shapes and attributes, and the model is then drawn rather than run;
+        ``on_unsupported="error"`` refuses such models instead.
         """
         if feature_names is None and features is None and _plainly_named(X, estimator):
             # Fitted on an array and given a table: the table is where the names are.
@@ -236,6 +241,7 @@ class Models(Resource):
             input_shape=input_shape,
             preprocess=preprocess,
             check_rows=X,
+            on_unsupported=on_unsupported,
         )
         spec = extraction.spec
         warn_if_large_spec(spec)
@@ -376,17 +382,26 @@ class Models(Resource):
         progress: Optional[Progress] = None,
         input_shape: Optional[Sequence[int]] = None,
         preprocess: Optional[Mapping[str, Any]] = None,
+        on_unsupported: str = "draw",
+        metadata: Optional[Mapping[str, Any]] = None,
     ):
         """Attach layers and weights to an existing model.
 
         Pass a fitted estimator, an :class:`~kaimei.structure.Extraction`, or an
         already-extracted structure dict (whose ``$tensor`` references must already be uploaded).
-        ``input_shape`` and ``preprocess`` are as for :meth:`upload`.
+        ``input_shape``, ``preprocess`` and ``on_unsupported`` are as for :meth:`upload`; ``metadata``
+        adds your own entries to what the spec records about where it came from.
         """
         if isinstance(estimator_or_spec, Extraction):
             extraction = estimator_or_spec
         elif isinstance(estimator_or_spec, Mapping):
             extraction = Extraction(spec=dict(estimator_or_spec))
+        else:
+            extraction = None  # type: ignore[assignment]
+        if extraction is not None:
+            if metadata:
+                merged = {**dict(extraction.spec.get("metadata") or {}), **{str(key): value for key, value in metadata.items()}}
+                extraction = Extraction(spec={**extraction.spec, "metadata": merged}, tensors=extraction.tensors)
         else:
             extraction = extract_structure(
                 estimator_or_spec,
@@ -397,6 +412,8 @@ class Models(Resource):
                 externalize_above=externalize_above,
                 input_shape=input_shape,
                 preprocess=preprocess,
+                on_unsupported=on_unsupported,
+                metadata=metadata,
             )
         if extraction.externalized:
             self.upload_tensors(model, extraction.tensors, progress=progress)
