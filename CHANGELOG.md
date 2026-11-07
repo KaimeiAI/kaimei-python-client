@@ -1,6 +1,27 @@
 # Changelog
 
-## 0.7.2 — 2026-11-05
+## 0.7.2 — 2026-11-07
+
+Needs the API release that understands flat forests and composites: deploy that first.
+
+### Changed
+
+- **Uploads are checked more strictly, and some models are drawn instead of run.** A model is sent with a few rows and
+  its own library's answers to them, and the API scores those rows with the engine that will run it. If they don't
+  match, the model is drawn, not run. The rows aren't stored, and `weights="summary"` doesn't send them. That covers
+  PyTorch and Keras models, convolutional ones included. `SVC` and `NuSVC` with `probability=True`, whose labels can
+  disagree with their probabilities, and any subclass with its own `predict` are drawn too. **Models already uploaded
+  keep their old label until they are re-uploaded**, because the server never holds the model itself to check it.
+- Dense PyTorch networks are read op by op, as convolutional ones already were, so `F.relu`, `torch.sigmoid` and a skip
+  connection from the inputs run correctly rather than being missed. Modules `torch.fx` can't trace still go through
+  forward hooks and are drawn.
+- `nn.GELU()`, `F.gelu` and Keras `gelu` are drawn, not run: they default to the exact form, and Kaimei runs the tanh
+  form, which is too close for a check on convolutional models to tell apart. `approximate="tanh"` runs.
+- Reference rows go up in pieces of about 32 MiB, so a large `X` no longer hits the API's limit on one request.
+- `upload(X=...)` also checks the model on your rows, not only on rows around zero and its splits.
+- Summaries and cards say what a base value is, and call a model's outputs scores when it has no probabilities.
+- A plot of a very wide model has a row for what wasn't attributed to one input, so its last bar is the prediction.
+- `upload` warns when reference rows were refused, instead of leaving them out silently.
 
 ### Fixed
 
@@ -8,27 +29,139 @@
   walked into fitted children and kept the first one that looked exact. A forest over 30 trees or
   4,000 nodes, sklearn's default `RandomForestClassifier()` included, ran as its first tree. A
   `VotingClassifier`, `BaggingClassifier` or a vendor's list of models ran as its first member, and
-  `CalibratedClassifierCV` and `TransformedTargetRegressor` ran without the step they add. A spec
-  is now read only from what predicts as the whole model does: large forests and boosted models
-  upload as importance summaries, and meta-estimators that change the prediction are refused with
-  an explanation. **Re-upload any model affected by this**: a stored spec keeps its old numbers.
-- AdaBoost, `IsolationForest`, and bagging over a subset of columns no longer run as a plain average
-  of their trees.
-- Linear models are checked against their own output, and any that disagree are drawn but not run:
-  `PoissonRegressor` and other non-identity links, `SVC(probability=True)`, and multiclass
-  `SGDClassifier`.
+  `CalibratedClassifierCV` and `TransformedTargetRegressor` ran without the step they add. **Re-upload
+  any model affected by this**: a stored spec keeps its old numbers.
+- AdaBoost, and bagging over a subset of columns, no longer run as a plain average of their trees.
 - Scaler pipelines apply every scaler as sklearn does. Only the last of several scalers was kept, and
   `StandardScaler(with_mean=False)` or `with_std=False` used the wrong centre or scale.
+- Single trees and small forests compare inputs in single precision as sklearn does, which decides a
+  row that sits exactly on a split.
+- `XGBRegressor(objective="reg:logistic")` and `LGBMRegressor(objective="cross_entropy")` reported one
+  minus their output. Bare XGBoost and LightGBM boosters now carry class labels and go through the check.
+- `XGBClassifier(missing=0)`, or any other marker for missing values, now takes the branch XGBoost does
+  for that value. Before, it scored those rows as ordinary numbers.
+- A `CatBoostRegressor` no longer uploads as a multiclass classifier, whichever way its trees grow.
+- A PyTorch layer called twice no longer fails with `Duplicate structure node`.
+- `predictions.retrieve` encodes the id, so one holding `?` or `#` reads back.
+- Models fitted on data with missing values can be uploaded. sklearn gives them infinite thresholds, which
+  JSON can't carry, and those thresholds also made the check skip them.
+- A model with several regression outputs is drawn but not run. It used to report its first output as the
+  model's only output, as exact.
+- `upload(X=...)`, or any call whose body held `NaN`, raised a raw `ValueError`. `NaN` now travels as `null`,
+  which is how JSON writes a missing value.
+- `predict`, `explanations.create` and `trace_structure` raise `ValueError` for a `NaN` on a feature that can't take
+  a gap, after one extra request to read the model. As `null` it would have used the feature's baseline.
+  Infinity in a request now says what's wrong.
+- **`weights="summary"` sent real numbers.** Trees, small forests, starting scores, per-tree weights, calibration
+  curves and scaler statistics all went up as they were, and the statistics of a small tensor gave away its values.
+  Now a summary holds shapes, feature importances or how often each feature is split on, and statistics only for
+  layers of 256 values or more. Those statistics still include a layer's largest and smallest value.
+- A pipeline's `SimpleImputer` is no longer read as handling gaps, which was wrong for some rows. Its fill values
+  become the features' baselines instead, so a `null` gets what the imputer would give it, and reference rows with gaps
+  are kept. A `SimpleImputer(missing_values=-999)` raises `StructureError`: it replaces real numbers, so reading it as
+  nothing was wrong for those rows, and the check didn't try them.
+- PyTorch and Keras models ran as exact with wrong numbers when `forward()` held logic that wasn't read. They now run
+  correctly when it can be read, and are drawn when it can't.
+- A PyTorch classifier that ends in logits gets its sigmoid or softmax, as image models already did.
+- A scaler in front of any tree model is exact on rows sitting on a split. A threshold is now moved into the input's
+  units by searching with the scaler's own arithmetic and the library's own comparison, not by multiplying it back out.
+  This also lets a scaler precede XGBoost, LightGBM and CatBoost.
+- Multiclass `SGDClassifier(loss="log_loss")` and `OneVsRestClassifier` over anything with a margin (logistic regression,
+  `LinearSVC`, `RidgeClassifier`, `Perceptron`, `LinearDiscriminantAnalysis`, a linear `SVC`, or those behind a scaler)
+  decide by their margins, as scikit-learn does, where two classes' probabilities round to the same number.
+- A model only counts as matching if it was actually compared. One whose `predict` needs a table is now asked with one,
+  and one that refuses to answer at all is drawn, not run. It used to be called exact without being compared.
+- A subclass with its own `predict`, or your own class, inside a vote, a bag or a stack is drawn, not run. Only the
+  top of a model was looked at before.
+- A hard vote or `OneVsRestClassifier` over `SVC(probability=True)` is drawn, not run: its members decide by their
+  margins, and what's read of them is their probabilities.
+- An imputer behind a scaler gives a `null` the fill value in the input's units, not the scaler's.
+- A scaler in front of a stack with `passthrough=True` also reaches the features it passes through.
+- XGBoost's `missing` marker behind a scaler is drawn, not run, because no one input number stands for it.
+- A classifier with several outputs of different sizes is drawn, not run. It was read as two classes with odd names.
+- A `PoissonRegressor` and the other log-link models run where their library overflows to infinity.
+- Members that don't fit together, such as a multiclass `SVC` in a bag or a vote, are drawn. `upload` raised a raw
+  `ValueError`.
+- A pipeline inside a pipeline's preprocessing is read, and two scalers in a row no longer clash on a one-feature model.
+- `TransformedTargetRegressor` runs with `MinMaxScaler` and `RobustScaler` as well as `StandardScaler`.
+- A two-output PyTorch or Keras classifier with `task="binary_classification"`, and a Keras `Sequential` that ends in
+  logits, run. So do Keras models with a softmax after `Add` or `Concatenate`, or dropout after their softmax.
+- A layer or a reader's own step can share its name with a feature. `upload` used to refuse the model.
+- LightGBM fitted on a table with spaces in its column names keeps them, and `X` is read before anything is created, so
+  an `X` that doesn't fit leaves no model behind.
+- `feature_names` that moves any name the estimator was fitted on is refused, even if others are new.
+- A PyTorch model whose `forward()` feeds its layers in a way that can't be read gets a clear `unsupported_layers` error,
+  not the API's complaint about a weight's shape.
+- A Keras model ending in `Dense(n)` then `Softmax()` or `Activation("softmax")` is read as a classifier. It was refused.
+- A skip connection from a Keras network's raw inputs runs. It was refused with an unhelpful message.
+- CatBoost, LightGBM and XGBoost models fitted on a table keep its column names when `feature_names` isn't passed. The
+  names a library makes up for a bare array (`0`, `Column_0`) are no longer taken for real ones, so `X`'s columns name
+  the model.
+- A multiclass `SVC` is drawn, not run. It votes across pairs of classes, which a linear reading can't do.
+- `feature_names` in a different order from the estimator's `feature_names_in_` raises `StructureError`.
+- The check against the estimator scales with the size of the outputs. Outputs around `1e-7` used to match anything.
+- A `LightGBM` or `XGBoost` subclass keeps its class labels and its checks. The wrong number of `feature_names` is
+  a `StructureError` for every kind of model. For trees it used to be accepted, or a raw `IndexError`.
 
 ### Added
 
-- `StandardScaler` or `MinMaxScaler` in front of a forest folds into every tree, so the pipeline
-  runs. It used to be refused.
+- Tree models of any size now run: forests, gradient boosting, histogram boosting, AdaBoost, bagging,
+  XGBoost, LightGBM and CatBoost. Large ones travel as flat binary arrays in full precision.
+- Models made of other models now run: voting (soft, hard, weighted), stacking, calibration, bagging,
+  one-vs-rest, and `TransformedTargetRegressor` with a scaler or a NumPy inverse.
+- `PoissonRegressor`, `GammaRegressor`, `TweedieRegressor` with a log link, a binary linear
+  `SVC(probability=True)` and multiclass `SGDClassifier(loss="log_loss")` run exactly.
+- `RobustScaler`, `MaxAbsScaler`, any `MinMaxScaler` range and `SimpleImputer` work in pipelines, and a
+  scaler can precede any tree model.
+- Every scikit-learn, XGBoost, LightGBM and CatBoost upload is checked against the estimator's own output,
+  including rows exactly on its splits and rows holding zeros. A spec that doesn't reproduce it is drawn but
+  not run, with a warning. Keras and PyTorch models are scored against their own outputs too.
+- XGBoost's `dart` booster runs, and AdaBoost runs inside a calibrator or a stack.
+- **Rows with missing values run, on models that handle them.** The check also scores rows with gaps. Where the
+  library accepts them and the reading matches, numeric features get `allow_missing` and a row can send `null`.
+  Shapley methods explain such a row; LIME and counterfactuals return `missing_value_not_supported`.
+- `LinearSVC`, `RidgeClassifier` and others without `predict_proba` are marked `uncalibrated`, because
+  their 0..1 outputs are scores rather than probabilities.
 
 ### Changed
 
-- `OneVsRestClassifier` is refused like other meta-estimators, even on a binary problem where its
-  single member would have matched.
+- `client.models.upload_tensors` sends double-precision arrays as `f64` unless you pass `dtype`.
+
+### Changed in the API this release needs
+
+These change results for models you already have, and they don't depend on the client version:
+
+- **Rows with a missing value now count.** Analyses and reference averages used to leave them out, and KernelSHAP
+  explained a missing value as if it were present. Stored insights and explanations of those models may differ.
+- `inference.url` can't be a loopback, private-network or cloud metadata address (`invalid_inference_url`), and moving
+  it to another host needs its credentials sent again (`inference_credentials_required`).
+- A reply from an endpoint is limited to 64 MB and to `timeout_s` in all, and an organization can have 12 calls to
+  endpoints in progress at once (`429 inference_busy`). Analyses wait for a free call instead of failing.
+- An organization's analyses take turns, leaving a worker for other organizations, and a job still in line isn't
+  reported as lost.
+- Replacing a model's structure updates `allow_missing` to what the new structure does. Class labels follow the order
+  of the outputs. A `target_class` analysis scores accuracy for that class, and rows with no label no longer count.
+- A binary `target_class` analysis now names that class. It used to name the positive class while reporting the other
+  class's share.
+- A forest with no rule for missing values refuses a missing value (`missing_value_not_supported`), even when a feature
+  declares `allow_missing`.
+- A link from outside the dashboard asks before signing you in, and a confirmation link works once.
+- JSON nested more than 64 levels deep is refused (`too_deeply_nested`), an image feature can hold at most 8,000,000
+  values, and an address over 254 characters isn't an email. A `prediction_id` holding a slash can now be read back.
+- An email address that signed up with a password and never confirmed it loses that password when its real owner
+  signs in with Google or GitHub. Otherwise whoever signed up first would get in to the owner's account.
+- **A multiclass explanation with no `target` now explains the predicted class.** It used to explain the
+  first class while naming the predicted one, so stored explanations of those models may differ.
+- A multiclass analysis says which class it covers, and takes `options.target_class`.
+- Explaining a row with nothing to compare it with returns `no_reference_population`. It used to return
+  all-zero attributions.
+- `NaN` or infinity as an input is refused. It used to return a prediction, often of 0.
+- An output that isn't a finite number returns `non_finite_output`. It used to be reported as 0.
+- A network with several regression outputs also returns `values`, all of them. `value` is still the first,
+  and explanations explain that one.
+- Analyses run in a small pool of their own, so a burst waits in line (`status: queued`) rather than making other
+  requests fail. A job lost to a restart reports `failed` after an hour rather than `running` forever. A busy
+  database returns `503 database_busy` with `Retry-After`.
 
 ## 0.7.1 — 2026-11-01
 

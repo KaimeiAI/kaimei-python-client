@@ -136,7 +136,7 @@ def test_counterfactual_summary_says_what_flips_the_decision_or_how_close_it_got
     short = counterfactual_summary(_explanation(SHORT), model=MODEL)
     assert short.startswith("No change to at most 3 features flips the decision (Sex and Age held fixed).")
     assert "Fare from 7.25 GBP to 73.5 GBP and Pclass from 3 to 1" in short
-    assert short.endswith("still short of the 50.0% threshold.")
+    assert short.endswith("without changing it.")
     assert "counterfactual" in counterfactual_summary(_explanation())
 
 
@@ -147,7 +147,7 @@ def test_plot_explanation_walks_from_the_average_to_the_prediction():
     fig = plot_explanation(_explanation(), model=MODEL, max_features=3)
     ax = fig.axes[0]
     labels = [t.get_text() for t in ax.get_yticklabels()]
-    assert labels == ["Average (reference data)", "Sex = male", "Pclass = 3", "Fare = 7.25 GBP",
+    assert labels == ["Average (reference sample)", "Sex = male", "Pclass = 3", "Fare = 7.25 GBP",
                       "2 other features", "This prediction"]
     bars = [p for p in ax.patches if p.get_width() > 0]
     assert len(bars) == 4

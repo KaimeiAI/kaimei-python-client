@@ -211,6 +211,10 @@ def fmt_number(value: Any, digits: int = 2) -> str:
     number = _float(value)
     if number is None:
         return "—"
+    if digits > 0 and number != 0 and abs(number) < 10.0**-digits:
+        # A small number isn't zero, and a model can work entirely at that scale.
+        mantissa, exponent = f"{number:.1e}".split("e")
+        return f"{mantissa}e{int(exponent)}"
     text = f"{number:,.{digits}f}"
     if "." in text:
         text = text.rstrip("0").rstrip(".")
@@ -598,13 +602,17 @@ def _explanation(data: Mapping[str, Any]) -> str:
     out = [_head("Explanation", data.get("id"), _when(data))]
     head_sub = ""
     if sub:
-        head_sub = f"P({_e(label)}) = {_e(sub)}" if classification and isinstance(label, str) and sub.endswith("%") else _e(sub)
+        name = "score" if (data.get("output") or {}).get("uncalibrated") else "P"
+        head_sub = f"{name}({_e(label)}) = {_e(sub)}" if classification and isinstance(label, str) and sub.endswith("%") else _e(sub)
     out.append(f'<div class="km-result"><span class="km-value">{_e(main)}</span>' + (f'<span class="km-sub">{head_sub}</span>' if head_sub else "") + "</div>")
     badges = [_badge(METHOD_LABEL.get(method, method or "attributions"), "ok")]
+    if (data.get("output") or {}).get("uncalibrated"):
+        badges.append(_badge("score, not a probability", "info", title="This model only ranks or votes"))
     if isinstance(target, str) and target != label:
         badges.append(_badge(f"explains {target}", "info"))
     if _float(data.get("base_value")) is not None:
-        badges.append(_badge(f"base {fmt_number(data['base_value'], 3)}", mono=True, title="Average prediction over the reference data"))
+        meaning = "The intercept of a local fit" if method == "lime" else "Average prediction over the rows it was compared with"
+        badges.append(_badge(f"base {fmt_number(data['base_value'], 3)}", mono=True, title=meaning))
     if data.get("n_evals") is not None:
         badges.append(_badge(f"{compact(data.get('n_evals'))} evals", mono=True, title="Model calls made for this explanation"))
     if _float(data.get("latency_ms")) is not None:
@@ -645,7 +653,8 @@ def _explanation(data: Mapping[str, Any]) -> str:
 
     counterfactual = data.get("counterfactual")
     if isinstance(counterfactual, Mapping) and counterfactual:
-        quantity = f"P({target})" if classification and isinstance(target, str) else None
+        name = "score" if (data.get("output") or {}).get("uncalibrated") else "P"
+        quantity = f"{name}({target})" if classification and isinstance(target, str) else None
         out.append(_counterfactual(counterfactual, classification, quantity))
 
     if inputs:

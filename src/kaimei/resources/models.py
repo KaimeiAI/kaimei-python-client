@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import re
 import warnings
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union
 
+from .._http import encode_json
 from .._objects import APIObject
 from ..structure import (
     EXTERNALIZE_ABOVE,
     Extraction,
+    _names_it_was_fitted_on,
     cap_reference_rows,
     detect_framework,
     encode_tensor,
@@ -19,6 +22,25 @@ from ..structure import (
     warn_if_large_spec,
 )
 from ._base import Page, Resource, compact
+
+
+def _plainly_named(X: Any, estimator: Any) -> bool:
+    """Whether ``X`` names the model: a table, and an estimator with no names of its own for its order to match."""
+    columns = getattr(X, "columns", None)
+    if columns is None:
+        return False
+    fitted = _names_it_was_fitted_on(estimator)
+    if fitted is None:
+        return True
+    # LightGBM keeps a column's name with underscores for its spaces, and the table has what it's really called.
+    written = [str(column) for column in columns]
+    return written != [str(name) for name in fitted] and [
+        re.sub(r"\s", "_", name) for name in written
+    ] == [str(name) for name in fitted]
+
+
+#: Reference rows go up in pieces of about this many bytes.
+REFERENCE_PIECE_BYTES = 32 * 1024 * 1024
 
 #: Called as ``progress(stage, done, total)`` while a large model uploads.
 Progress = Callable[[str, int, int], None]
@@ -124,9 +146,10 @@ class Models(Resource):
         return self._delete(f"/v1/models/{model}/versions/{version}")
 
     def predict(self, model: str, *, input: Mapping[str, Any], log: bool = True, metadata: Optional[Mapping[str, Any]] = None):
+        row = self._check_gaps(model, dict(input))
         return self._post(
             f"/v1/models/{model}/predict",
-            compact({"input": dict(input), "log": log, "metadata": dict(metadata) if metadata else None}),
+            compact({"input": row, "log": log, "metadata": dict(metadata) if metadata else None}),
         )
 
     def stats(self, model: str, *, days: int = 30):
@@ -193,12 +216,16 @@ class Models(Resource):
         so models with millions of parameters work; ``weights="summary"`` sends shapes
         and statistics only and keeps the weights in your environment.
 
-        Executable families (linear, MLP, tree, small forest, dense/conv nets with
-        every weight uploaded) can be queried for explanations and analyses.
+        Executable families (linear, MLP, trees and tree ensembles of any size, models
+        made of those, dense/conv nets with every weight uploaded) can be queried for
+        explanations and analyses.
         Summaries and approximate nets need ``inference={"type": "remote", "url": "..."}``
         or pre-computed attributions. ``progress(stage, done, total)`` is called while
         tensors upload.
         """
+        if feature_names is None and features is None and _plainly_named(X, estimator):
+            # Fitted on an array and given a table: the table is where the names are.
+            feature_names = [str(column) for column in X.columns]
         extraction = extract_structure(
             estimator,
             feature_names=feature_names,
@@ -208,6 +235,7 @@ class Models(Resource):
             externalize_above=externalize_above,
             input_shape=input_shape,
             preprocess=preprocess,
+            check_rows=X,
         )
         spec = extraction.spec
         warn_if_large_spec(spec)
@@ -226,6 +254,7 @@ class Models(Resource):
             extra_meta["binary_tensors"] = len(extraction.tensors)
         if metadata:
             extra_meta.update(dict(metadata))
+        # Binary tensors go up before the structure, so a spec with them holds its check until then.
         if resolved_inference.get("type", "none") == "none" and not spec_is_executable(spec):
             warnings.warn(
                 "This estimator was stored as a sketch or feature-importance summary. "
@@ -241,6 +270,15 @@ class Models(Resource):
                 UserWarning,
                 stacklevel=2,
             )
+        # Rows that can't be read are refused here, before there's a model on the server to leave behind.
+        reference = None
+        if X is not None:
+            image = image_shape_of(spec)
+            rows, _names = rows_from_inputs(X, names or None, image_shape=image)
+            labels = labels_from_target(y) if y is not None else None
+            per_row = int(image[0] * image[1] * image[2]) if image else 1
+            reference = cap_reference_rows(rows, labels, values_per_row=per_row)
+
         # A structure that references binary tensors can only be validated once they exist, so a
         # large model is registered from its shapes first and receives the real spec afterwards.
         initial = extraction.summary_spec() if extraction.externalized else spec
@@ -267,14 +305,41 @@ class Models(Resource):
             self._put(f"/v1/models/{model_ref}/structure", spec)
             if progress:
                 progress("structure", 1, 1)
-        if X is not None:
-            image = image_shape_of(spec)
-            rows, _names = rows_from_inputs(X, names or None, image_shape=image)
-            labels = labels_from_target(y) if y is not None else None
-            per_row = int(image[0] * image[1] * image[2]) if image else 1
-            rows, labels = cap_reference_rows(rows, labels, values_per_row=per_row)
-            self.upload_reference_data(model_ref, rows=rows, labels=labels)
+        if reference is not None:
+            rows, labels = reference
+            refused = self._upload_reference_in_pieces(model_ref, rows, labels)
+            if refused:
+                warnings.warn(
+                    f"{refused} of {len(rows)} reference rows don't fit the features' declared types, so they were left "
+                    "out, and statistics describe the rest.",
+                    stacklevel=2,
+                )
+        if spec.get("check") is not None and resolved_inference.get("type", "none") == "none":
+            shown = self.structure(model_ref, detail="summary")
+            if shown.get("runnable") is False:
+                warnings.warn(
+                    "Run by Kaimei, this reading didn't give the model's own outputs, so it is drawn, not run. "
+                    "A scoring endpoint can run it.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         return created
+
+    def _upload_reference_in_pieces(self, model: str, rows: List[Any], labels: Optional[List[Any]]) -> int:
+        """Upload rows in pieces well under what the API and the proxies in front of it accept. Returns how many it refused."""
+        if not rows:
+            return 0
+        step = max(1, REFERENCE_PIECE_BYTES // max(len(encode_json(rows[0])), 1))
+        refused = 0
+        for start in range(0, len(rows), step):
+            stored = self.upload_reference_data(
+                model,
+                rows=rows[start : start + step],
+                labels=labels[start : start + step] if labels is not None else None,
+                mode="replace" if start == 0 else "append",
+            )
+            refused += int(stored.get("rejected") or 0) if hasattr(stored, "get") else 0
+        return refused
 
     def structure(
         self,
@@ -342,22 +407,26 @@ class Models(Resource):
         model: str,
         tensors: Mapping[str, Any],
         *,
-        dtype: str = "f32",
+        dtype: Optional[str] = None,
         progress: Optional[Progress] = None,
     ):
-        """Upload weight tensors as compressed binary; the spec references them as ``{"$tensor": key}``."""
+        """Upload weight tensors as compressed binary; the spec references them as ``{"$tensor": key}``.
+
+        Each tensor goes as ``f64`` when it is double precision and ``f32`` otherwise, unless ``dtype`` says.
+        """
         items = list(tensors.items())
         results = []
         for index, (key, array) in enumerate(items):
             if progress:
                 progress("tensors", index, len(items))
             shape = ",".join(str(int(dim)) for dim in getattr(array, "shape", ()) or (len(array),))
+            kind = dtype or ("f64" if str(getattr(array, "dtype", "")) == "float64" else "f32")
             results.append(
                 self._client._request(
                     "PUT",
                     f"/v1/models/{model}/structure/tensors/{key}",
-                    params={"shape": shape, "dtype": dtype, "compression": "zlib"},
-                    content=encode_tensor(array, dtype),
+                    params={"shape": shape, "dtype": kind, "compression": "zlib"},
+                    content=encode_tensor(array, kind),
                 )
             )
         if progress:
@@ -384,7 +453,8 @@ class Models(Resource):
         tree: Optional[int] = None,
     ):
         """Replay one prediction. ``detail="summary"`` returns per-node statistics for large models."""
-        body = {"input": dict(input), "detail": detail, "nodes": list(nodes) if nodes is not None else None, "tree": tree}
+        row = self._check_gaps(model, dict(input))
+        body = {"input": row, "detail": detail, "nodes": list(nodes) if nodes is not None else None, "tree": tree}
         return self._post(f"/v1/models/{model}/structure/trace", compact(body))
 
     def activations(

@@ -88,21 +88,22 @@ def explanation_summary(explanation: Any, *, model: Any = None, top: int = 3) ->
     value = _output_value(explanation)
     classification = _is_classification(explanation)
     target = _target(explanation)
+    measure = _base_words(explanation)
     if classification:
         label = output.get("label", target)
-        sentence = f"The model predicts {label}: P({target}) = {_pct(value)}"
+        sentence = f"The model predicts {label}: {_quantity(explanation, target)} = {_pct(value)}"
         if base is not None:
-            sentence += f", against {_pct(float(base))} on average over the reference data"
+            sentence += f", against {_pct(float(base))} {measure}"
     else:
         sentence = f"The model predicts {_num(value)}{_unit_suffix(output.get('unit'))}"
         if base is not None:
-            sentence += f", against {_num(float(base))} on average over the reference data"
+            sentence += f", against {_num(float(base))} {measure}"
     sentence += "."
     # Name only contributions worth reading: at least 5% of the largest one.
     floor = 0.05 * max((abs(a) for a in attributions.values()), default=0.0)
     up = sorted(((n, a) for n, a in attributions.items() if a > floor), key=lambda item: -item[1])[:top]
     down = sorted(((n, a) for n, a in attributions.items() if a < -floor), key=lambda item: item[1])[:top]
-    subject = f"P({target})" if classification else "it"
+    subject = _quantity(explanation, target) if classification else "it"
 
     def listing(items: Sequence[Tuple[str, float]]) -> str:
         return ", ".join(
@@ -117,6 +118,25 @@ def explanation_summary(explanation: Any, *, model: Any = None, top: int = 3) ->
     if base is not None and value is not None and float(value) < float(base):
         parts.reverse()
     return " ".join([sentence, *parts])
+
+
+def _quantity(explanation: Any, target: Any) -> str:
+    """A model that only ranks or votes has scores in 0..1, and calling those probabilities would claim too much."""
+    output = _get(explanation, "output") or {}
+    return f"score({target})" if output.get("uncalibrated") else f"P({target})"
+
+
+def _base_words(explanation: Any) -> str:
+    """What an explanation's base value is, which depends on how it was computed."""
+    options = _get(explanation, "options") or {}
+    if _get(explanation, "method") == "lime":
+        return "as the intercept of a local fit"
+    source = options.get("background_source")
+    if source == "baselines":
+        return "at the features' baselines"
+    if source == "predictions":
+        return "on average over a sample of logged inputs"
+    return "on average over a sample of the reference data"
 
 
 def counterfactual_summary(explanation: Any, *, model: Any = None) -> str:
@@ -143,13 +163,12 @@ def counterfactual_summary(explanation: Any, *, model: Any = None) -> str:
         flipped = changes[-1].get("label_after") if changes else None
         if cf.get("found"):
             return f"Changing {edits} flips the decision to {flipped or 'the other class'}{held}: {moved}."
-        threshold = goal.get("threshold", 0.5)
         limit = (_get(explanation, "options") or {}).get("max_changes", len(changes))
         if not changes:
-            return f"No change to at most {limit} features moves the prediction toward the threshold{held}."
+            return f"No change to at most {limit} features moves the prediction toward another decision{held}."
         return (
             f"No change to at most {limit} features flips the decision{held}. The closest: {edits}, "
-            f"which takes {moved}, still short of the {_pct(threshold)} threshold."
+            f"which takes {moved} without changing it."
         )
     moved = f"the prediction {_num(before)} → {_num(after)}"
     if cf.get("found"):
@@ -191,6 +210,10 @@ def plot_explanation(
     rows: List[Tuple[str, float]] = [(_feature_text(name, inputs.get(name), model), a) for name, a in shown]
     if rest:
         rows.append((f"{len(rest)} other features", sum(a for _, a in rest)))
+    # A very wide model's screening leaves a remainder no single input is credited with.
+    residual = float((_get(explanation, "options") or {}).get("residual") or 0.0)
+    if residual:
+        rows.append(("Not attributed to one input", residual))
     end = base + sum(a for _, a in rows)
     cut = _threshold(explanation, model, threshold) if classification else None
 
@@ -246,7 +269,10 @@ def plot_explanation(
     if cut is not None:
         ax.axvline(cut, color=_MUTED, linewidth=1, zorder=1)
         ax.text(cut, -0.75, f"threshold {_pct(cut)}", ha="center", va="bottom", fontsize=8.5, color=_MUTED)
-    labels = ["Average (reference data)"] + [text for text, _ in rows] + ["This prediction"]
+    origin = "Local fit's intercept" if _get(explanation, "method") == "lime" else "Average (reference sample)"
+    if (_get(explanation, "options") or {}).get("background_source") == "baselines":
+        origin = "At the baselines"
+    labels = [origin] + [text for text, _ in rows] + ["This prediction"]
     ax.set_yticks(ys)
     ax.set_yticklabels(labels)
     ax.set_ylim(n - 0.4, -0.9)
@@ -801,7 +827,14 @@ def _threshold(explanation: Any, model: Any, override: Optional[float]) -> Optio
     if len(output.get("probabilities") or {}) != 2:
         return None
     outputs = _get(model, "outputs") or {}
-    return float(outputs.get("threshold", 0.5) if outputs.get("threshold") is not None else 0.5)
+    threshold = float(outputs.get("threshold", 0.5) if outputs.get("threshold") is not None else 0.5)
+    # The plot's axis is the explained class. The threshold is on the positive one, and they can differ.
+    positive = outputs.get("positive_label")
+    target = output.get("target_label")
+    labels = [str(label) for label in outputs.get("labels") or []]
+    if positive is None and len(labels) == 2:
+        positive = labels[1]
+    return 1.0 - threshold if target is not None and positive is not None and str(target) != str(positive) else threshold
 
 
 def _features(model: Any) -> Dict[str, Mapping[str, Any]]:

@@ -219,3 +219,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CatBoost writes this next to whatever runs it
+catboost_info/

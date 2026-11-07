@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterator, Mapping, Optional, Sequence
+from urllib.parse import quote
 
 from .._objects import APIObject
 from ._base import Page, Resource, compact
@@ -33,7 +34,8 @@ class Predictions(Resource):
         return self._post("/v1/predictions/batch", {"model": model, "items": [dict(i) for i in items]})
 
     def retrieve(self, prediction_id: str) -> APIObject:
-        return self._get(f"/v1/predictions/{prediction_id}")
+        # An id can hold anything a path can't, such as ? or #.
+        return self._get(f"/v1/predictions/{quote(prediction_id, safe='/')}")
 
     def list(
         self,
