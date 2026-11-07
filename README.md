@@ -30,6 +30,11 @@ print(explanation.top_features)
 
 The same call as `POST https://api.kaimei.ai/v1/explanations`. See [kaimei.ai](https://kaimei.ai) for the language-agnostic REST examples and the [API reference](https://api.kaimei.ai/docs) for every endpoint.
 
+## Documentation
+Our documentation page can be found here: [`Kaimei Docs`](https://kaimei.ai/docs/)
+
+To get started, see the [`Quickstart`](https://kaimei.ai/docs/quickstart) page, and reference the examples below.
+
 ## Install
 
 ```bash
@@ -350,4 +355,4 @@ Errors raise `kaimei.KaimeiError` subclasses (`AuthenticationError`, `Permission
 
 ## License
 
-Apache 2.0. Copyright Kaimei AI.
+Distributed under the [`Apache 2.0 License`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/LICENSE). Copyright Kaimei AI.
