@@ -60,7 +60,7 @@ Create an API key in the [dashboard](https://dashboard.kaimei.ai) (session login
   - analyse the whole model;
   - monitor production traffic and catch drift;
   - ship an improved version;
-  - explain a model Kaimei can't run itself: XGBoost, via TreeSHAP values and via a scoring endpoint.
+  - explain a model through your own infrastructure: XGBoost here, via TreeSHAP values and a scoring endpoint. Kaimei can also run XGBoost itself.
 - [`examples/upload_sklearn.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/upload_sklearn.py) / [`.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/upload_sklearn.ipynb): the smallest upload-and-explain round trip.
 - [`examples/cats_dogs_gradcam.py`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_gradcam.py) and [`cats_dogs_explain.ipynb`](https://github.com/KaimeiAI/kaimei-python-client/blob/main/examples/cats_dogs_explain.ipynb): an image model (MobileNetV2) explained with Grad-CAM, occlusion and LIME.
 
@@ -86,13 +86,13 @@ model = client.models.upload(
 What happens next:
 
 - **Visualize** — always. The dashboard draws the uploaded structure.
-- **Explain / predict / analyse** — when the spec is executable (linear, MLP, decision tree, or a forest of ≤30 trees / ≤4,000 nodes). The API runs that structure in-process.
+- **Explain / predict / analyse** — when the spec is executable: see the table below. The API runs that structure in-process.
 - **Otherwise** — pass a live scoring URL, or POST pre-computed attributions:
 
 ```python
 client.models.upload(
-    large_forest,
-    name="Churn forest",
+    my_custom_model,
+    name="Churn scorer",
     inference={"type": "remote", "url": "https://scoring.example.com/predict"},
 )
 ```
@@ -115,7 +115,7 @@ model = client.models.upload(
 Options:
 
 - `externalize_above=` — values per tensor above which it uploads as binary (default 65,536; `None` keeps everything inline).
-- `weights="summary"` — upload shapes and statistics only. The architecture is drawable; the weights never leave your environment. Explain / predict then need `inference={"type": "remote", ...}`.
+- `weights="summary"` — upload shapes and statistics only. The architecture is drawable; the weights never leave your environment. Layers under 256 values send no statistics, since those would give the values away. Trees and models made of other models send only how many trees there are and how often each feature is split on, or the model's feature importances. Explain / predict then need `inference={"type": "remote", ...}`.
 - `extract_structure(estimator, ...)` returns the spec and the tensors without uploading, for inspection or a custom upload.
 - `client.models.tensors(model)` lists what was uploaded; `structure_parameter_values(model, "fc1.weight")` reads a tensor back as float32.
 
@@ -127,15 +127,29 @@ A runnable walkthrough lives in [`examples/upload_sklearn.py`](https://github.co
 | --- | --- | --- |
 | sklearn linear (`coef_` / `intercept_`) | Exact weights | Yes |
 | sklearn `MLPClassifier` / `MLPRegressor` | Exact layers | Yes |
-| sklearn tree | Full node list | Yes |
-| sklearn forest / extra trees | Trees if ≤30 estimators and ≤4,000 nodes; otherwise importances | Yes only when trees are inlined |
-| sklearn `Pipeline` + `StandardScaler` or `(0, 1)` `MinMaxScaler` | Scaler folded or inserted, then the estimator | Same as the final step |
+| sklearn tree | Full node list, or flat binary arrays above 2,000 nodes | Yes |
+| sklearn forest / extra trees, any size | Every tree: a node list when small, flat binary arrays above that | Yes |
+| sklearn `GradientBoosting*`, `HistGradientBoosting*`, `AdaBoost*` | Every tree, and how they combine | Yes, unless a split is categorical |
+| XGBoost `gbtree` and `dart`, LightGBM, CatBoost (sklearn API or booster) | Every tree, and how they combine | Yes, unless a split is categorical or the reading fails its check |
+| sklearn `Bagging*`, `Voting*`, `Stacking*`, `CalibratedClassifierCV`, `OneVsRestClassifier` | Every member, and how they combine | Yes, when every member is |
+| `TransformedTargetRegressor` with a scaler or a NumPy inverse (`expm1`, `exp`, ...) | The regressor and the inverse | Yes. Your own Python function can't be stored: pass `inference` remote |
+| sklearn `Pipeline` + `StandardScaler`, `MinMaxScaler`, `RobustScaler`, `MaxAbsScaler`, one or several, and `SimpleImputer` with its default `missing_values=NaN` | Scalers folded or inserted, then the estimator | Same as the final step |
 | Keras / TensorFlow `Dense`, `Conv2D` (any stride, padding, dilation, groups), `DepthwiseConv2D`, `SeparableConv2D`, `BatchNormalization`, max / average / global pooling, `Add`, `Multiply`, `Concatenate`, `ZeroPadding2D`, `Rescaling`, `Normalization`, flatten, dropout, LayerNorm; functional graphs and nested base models | Layer weights and the layer graph | Yes, unless a layer is unrecognized (`approximate`) |
 | `torch.nn` CNNs: `Conv2d` (stride, padding, dilation, groups), `BatchNorm2d`, max / average / adaptive pooling, residual `+`, `torch.cat`, squeeze-excitation `*`, `Flatten`, `ReLU6` / `Hardswish` / `SiLU` and the other common activations (ResNet, MobileNet, EfficientNet, DenseNet, VGG, SqueezeNet) | Traced with `torch.fx`, so functional ops are kept | Yes; pass `input_shape=(C, H, W)` |
-| `torch.nn` `Linear`, common activations, Dropout, LayerNorm, Embedding, BatchNorm1d | Forward-hook order | Yes, unless a layer is unrecognized (`approximate`) |
-| Wrapper around any of the above (`model_`, `estimator_`, `best_estimator_`, `module`, …) | Same as the inner estimator | Same as the inner estimator |
-| XGBoost / LightGBM / CatBoost (sklearn API) | `feature_importances_` summary | No — pass `inference` remote or attributions |
+| `torch.nn` `Linear`, common activations, Dropout, LayerNorm, Embedding, BatchNorm1d | Traced op by op, including `F.relu` and skip connections, or in forward-hook order when it can't be traced | Yes, when traced and it gives the module's own outputs. Otherwise drawn (`approximate`) |
+| Wrapper around any of the above that predicts as it does (`model_`, `estimator_`, `best_estimator_`, `module`, …) | Same as the inner estimator | Same as the inner estimator |
+| `SVC` and `NuSVC` with `probability=True`, or a hard vote or `OneVsRestClassifier` of them | Drawn, not run: `predict` goes by the margin and the probabilities by a separate fit, so a label and its probability can disagree | No |
+| A subclass with its own `predict`, or your own class inside a vote, a bag or a stack | Drawn, not run: its learned numbers don't show what it does | No |
+| `LinearSVC`, `RidgeClassifier` and others without `predict_proba` | Exact weights, marked `uncalibrated`: labels match sklearn, and the 0..1 outputs are scores rather than probabilities | Yes |
+| Other estimators (`SVC` with a non-linear kernel, k-nearest neighbours, naive Bayes, `IsolationForest`, pipelines with encoders, your own classes) | Refused with an explanation | No — register with `client.models.create` and an `inference` URL |
+| Anything else with `feature_importances_` | Importance summary | No — pass `inference` remote or attributions |
 | ONNX, Hugging Face, LLMs | Framework label only | No |
+
+Every scikit-learn, XGBoost, LightGBM and CatBoost upload is scored against the estimator on rows around and exactly on its splits. A reading that doesn't reproduce it is marked `approximate`, so it is drawn but not run. So far that covers `GradientBoosting*(init=<an estimator>)`, LightGBM `linear_tree` and CatBoost `MultiClassOneVsAll`. A model with several regression outputs is also drawn but not run, because a prediction reports one number or one class.
+
+The API repeats the check when the model arrives, for PyTorch and Keras models too, with the engine that will run it. A few rows and your library's answers to them go up with the model and aren't stored. `weights="summary"` doesn't send them. GELU in its default exact form (`nn.GELU()`, `F.gelu`, Keras `gelu`) is drawn, because Kaimei runs the tanh form: pass `approximate="tanh"` to run it.
+
+**Missing values.** The same check scores rows with gaps. If the library accepts them and the reading matches, the model's numeric features are registered with `allow_missing`, and a row can send `null`, or `NaN` from pandas, for a value it doesn't have. That covers XGBoost, LightGBM, CatBoost, `HistGradientBoosting*`, and scikit-learn trees and forests that support missing values. Other models need every value: a `null` takes the feature's `baseline` if it has one, and is refused otherwise, while `NaN` raises `ValueError`, since it means the value is missing rather than that you want the baseline. A pipeline's `SimpleImputer` is left out of the reading, so that model takes numbers only. Shapley methods explain a row with a gap; LIME and counterfactuals need every value. Reference rows with a gap are stored but sit out of averages, histograms and comparison populations.
 
 Unknown Keras / PyTorch layers that keep their input's shape are passed through and marked `approximate`. Those models visualize but cannot be queried unless you add a remote URL. Operations that change the shape and cannot be replayed (for example ShuffleNet's channel shuffle or an upsampling decoder) raise `StructureError(code="unsupported_layers")` naming them; register such models with a remote inference URL instead.
 

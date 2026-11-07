@@ -110,6 +110,28 @@ class Transport:
 
 def encode_json(body: Any) -> bytes:
     """Compact JSON, as httpx sends it, that also accepts NumPy arrays and scalars."""
+    try:
+        return _dumps(body)
+    except ValueError:
+        pass
+    # pandas and numpy write a missing value as NaN. JSON has no NaN, and its word for that is null.
+    try:
+        return _dumps(_null_for_nan(json.loads(json.dumps(body, default=_json_default))))
+    except ValueError as exc:
+        raise ValueError("Infinity can't be sent to Kaimei, because JSON can't hold it. Replace it with a number.") from exc
+
+
+def _null_for_nan(value: Any) -> Any:
+    if isinstance(value, float) and value != value:
+        return None
+    if isinstance(value, dict):
+        return {key: _null_for_nan(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_null_for_nan(item) for item in value]
+    return value
+
+
+def _dumps(body: Any) -> bytes:
     return json.dumps(body, default=_json_default, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode(
         "utf-8"
     )

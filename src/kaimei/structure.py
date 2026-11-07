@@ -19,6 +19,28 @@ import zlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .ensembles import (
+    FLAT_TREE_NODES,
+    INLINE_NODES,
+    INLINE_TREES,
+    NO_LIMIT,
+    READER,
+    Unreadable,
+    changes_how_it_predicts,
+    ensemble_spec,
+    far_rows,
+    flat_forest_spec,
+    flat_tree_spec,
+    handles_missing,
+    image_check,
+    moved_thresholds,
+    network_differs,
+    rows_to_check,
+    several_outputs,
+    through_scalers,
+    upload_check,
+    verify,
+)
 from .errors import KaimeiError
 
 MAX_REFERENCE_ROWS = 5000
@@ -32,7 +54,9 @@ EXTERNALIZE_ABOVE = 65_536
 COMPACT_EXTERNALIZE_ABOVE = 4_096
 #: Spec keys that hold learned or fitted tensors.
 TENSOR_KEYS = ("weight", "bias", "gamma", "beta", "center", "scale", "mean", "var", "std", "offset")
-EXECUTABLE_FAMILIES = {"network", "tree", "ensemble"}
+#: weights="summary" sends a tensor's statistics only from this size up.
+MIN_VALUES_FOR_STATS = 256
+EXECUTABLE_FAMILIES = {"network", "tree", "ensemble", "composite"}
 
 try:
     import numpy as np
@@ -62,7 +86,7 @@ _OUT_ACTIVATIONS = {"logistic": "sigmoid", "softmax": "softmax", "identity": Non
 
 def spec_is_executable(spec: Mapping[str, Any]) -> bool:
     """True when the API can score the uploaded spec (explain / predict / analyse)."""
-    if spec.get("approximate"):
+    if spec.get("approximate") or spec.get("weights") == "summary":
         return False
     return str(spec.get("family") or "") in EXECUTABLE_FAMILIES
 
@@ -156,6 +180,7 @@ def finalize_spec(
     weights: str = "full",
     externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
     tensors: Optional[Mapping[str, Any]] = None,
+    prefix: str = "",
 ) -> Extraction:
     """Turn the arrays inside a raw spec into JSON lists, binary references, or ghosts.
 
@@ -163,12 +188,16 @@ def finalize_spec(
     values are sent; existing ``$tensor`` references are summarised from ``tensors`` when
     given. Otherwise tensors with more than ``externalize_above`` values become
     ``{"$tensor": key}`` references and are returned in :attr:`Extraction.tensors`;
-    ``None`` keeps everything inline.
+    ``None`` keeps everything inline. A check on the upload goes only with the real weights.
     """
     if weights not in {"full", "summary"}:
         raise StructureError("weights must be 'full' or 'summary'.", code="invalid_structure", param="weights")
     numpy = _require_numpy()
+    if weights == "summary" and (spec.get("nodes") or spec.get("trees") or spec.get("family") == "composite"):
+        return Extraction(spec=_trees_in_summary(spec, tensors), tensors={})
     out = dict(spec)
+    if weights == "summary":
+        out.pop("check", None)  # Rows and answers are exactly what a summary keeps at home.
     lifted: Dict[str, Any] = {}
     layers = spec.get("layers")
     if isinstance(layers, list):
@@ -188,19 +217,17 @@ def finalize_spec(
                         known = (tensors or {}).get(str(value["$tensor"]))
                         shape = list(value.get("shape") or getattr(known, "shape", None) or ())
                         ghost: Dict[str, Any] = {"$shape": [int(dim) for dim in shape] or [1], "dtype": "f32"}
-                        if known is not None:
+                        if known is not None and _stats_say_little(key, known):
                             ghost["stats"] = tensor_stats(known)
                         layer[key] = ghost
                     continue
                 array = numpy.asarray(value, dtype=float)
-                if weights == "summary" and key in {"weight", "bias", "gamma", "beta"}:
-                    layer[key] = {
-                        "$shape": [int(dim) for dim in array.shape] or [1],
-                        "dtype": "f32",
-                        "stats": tensor_stats(array),
-                    }
+                if weights == "summary":
+                    layer[key] = {"$shape": [int(dim) for dim in array.shape] or [1], "dtype": "f32"}
+                    if _stats_say_little(key, array):
+                        layer[key]["stats"] = tensor_stats(array)
                 elif externalize_above is not None and array.size > externalize_above:
-                    tensor_key = f"{layer_id}.{key}"
+                    tensor_key = f"{prefix}{layer_id}.{key}"
                     lifted[tensor_key] = numpy.ascontiguousarray(array, dtype=numpy.float32)
                     layer[key] = {"$tensor": tensor_key, "shape": [int(dim) for dim in array.shape], "dtype": "f32"}
                 else:
@@ -209,11 +236,115 @@ def finalize_spec(
         out["layers"] = finalized
     if hasattr(out.get("importances"), "tolist"):
         out["importances"] = out["importances"].tolist()
+    if isinstance(spec.get("forest"), Mapping):
+        out["forest"] = _finalize_forest(spec["forest"], weights, externalize_above, tensors, lifted, prefix)
+    if isinstance(spec.get("combine"), Mapping):
+        out["combine"] = {key: value.tolist() if hasattr(value, "tolist") else value for key, value in spec["combine"].items()}
+        if weights == "summary":
+            # A starting score and per-tree weights are learned too. How trees add up isn't.
+            out["combine"] = {key: value for key, value in out["combine"].items() if key in {"method", "link", "tree_class"}}
+    if isinstance(spec.get("members"), list):
+        members = []
+        for index, member in enumerate(spec["members"]):
+            part = finalize_spec(member, weights=weights, externalize_above=externalize_above, tensors=tensors, prefix=f"{prefix}m{index}.")
+            members.append(part.spec)
+            lifted.update(part.tensors)
+        out["members"] = members
     if weights == "summary":
         out["weights"] = "summary"
     else:
         out.pop("weights", None)
     return Extraction(spec=out, tensors=lifted)
+
+
+def _stats_say_little(key: str, array: Any) -> bool:
+    """Whether a tensor's statistics can go with it. On a few values they are the values, and a scaler's are its data."""
+    return key in {"weight", "bias", "gamma", "beta"} and int(getattr(array, "size", 0)) >= MIN_VALUES_FOR_STATS
+
+
+def _split_counts(spec: Mapping[str, Any], counts: Dict[str, int], tensors: Optional[Mapping[str, Any]]) -> int:
+    """Adds how often each feature is split on to ``counts``, and returns how many trees that covers."""
+    numpy = _require_numpy()
+    own = [str(name) for name in spec.get("feature_names") or []]
+    total = sum(_split_counts(member, counts, tensors) for member in spec.get("members") or [])
+    for tree in list(spec.get("trees") or []) + ([spec] if spec.get("nodes") else []):
+        total += 1
+        names = [str(name) for name in tree.get("feature_names") or own]
+        for node in tree.get("nodes") or []:
+            feature = node.get("feature")
+            if not node.get("leaf") and feature is not None and int(feature) < len(names):
+                counts[names[int(feature)]] = counts.get(names[int(feature)], 0) + 1
+    forest = spec.get("forest")
+    if isinstance(forest, Mapping):
+        total += len(forest.get("roots") or [])
+        feature = forest.get("feature")
+        if isinstance(feature, Mapping):
+            feature = (tensors or {}).get(str(feature.get("$tensor")))
+        if feature is not None:
+            columns = numpy.asarray(feature, dtype=numpy.int64)
+            for column, count in zip(*numpy.unique(columns[columns >= 0], return_counts=True)):
+                if int(column) < len(own):
+                    counts[own[int(column)]] = counts.get(own[int(column)], 0) + int(count)
+    return total
+
+
+def _trees_in_summary(spec: Mapping[str, Any], tensors: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """A tree's numbers are all through its nodes, and a composite's are in its rule too, such as calibration curves.
+
+    With those kept private, what's left to send is how many trees there are and how often each feature is split on.
+    """
+    names = [str(name) for name in spec.get("feature_names") or []]
+    counts: Dict[str, int] = {}
+    trees = _split_counts(spec, counts, tensors)
+    splits = sum(counts.values()) or 1
+    out = {key: spec[key] for key in ("format", "framework", "task", "feature_names", "classes", "outputs", "reader") if spec.get(key)}
+    out.update(
+        {
+            "family": "ensemble_summary",
+            "n_estimators": trees,
+            "importances": [counts.get(name, 0) / splits for name in names],
+            "weights": "summary",
+            "summary": "How often each feature is split on. Everything the model learned stayed in your environment.",
+        }
+    )
+    return out
+
+
+def _finalize_forest(
+    forest: Mapping[str, Any],
+    weights: str,
+    externalize_above: Optional[int],
+    tensors: Optional[Mapping[str, Any]],
+    lifted: Dict[str, Any],
+    prefix: str,
+) -> Dict[str, Any]:
+    """Forest arrays stay double precision: a rounded threshold sends a row down the wrong branch."""
+    numpy = _require_numpy()
+    out: Dict[str, Any] = {}
+    for key, value in forest.items():
+        if key not in {"feature", "threshold", "left", "right", "value", "missing_left"}:
+            out[key] = value
+            continue
+        if isinstance(value, Mapping):
+            if weights == "summary" and "$tensor" in value:
+                out[key] = {"$shape": [int(dim) for dim in value.get("shape") or ()] or [1], "dtype": "f64"}
+            else:
+                out[key] = value
+            continue
+        array = numpy.asarray(value, dtype=float)
+        if weights == "summary":
+            # A threshold's minimum and maximum are thresholds, and a small tree's are all of them.
+            out[key] = {"$shape": [int(dim) for dim in array.shape] or [1], "dtype": "f64"}
+        elif externalize_above is not None and array.size > externalize_above:
+            tensor_key = f"{prefix}forest.{key}"
+            # Indexes are exact in single precision up to 2 ** 24, which halves what they cost to send.
+            small = key not in {"threshold", "value"} and array.size and float(numpy.abs(array).max()) < 2**24
+            kind = numpy.float32 if small else numpy.float64
+            lifted[tensor_key] = numpy.ascontiguousarray(array, dtype=kind)
+            out[key] = {"$tensor": tensor_key, "shape": [int(dim) for dim in array.shape], "dtype": "f32" if small else "f64"}
+        else:
+            out[key] = array.astype(numpy.int64).tolist() if key != "threshold" and key != "value" else array.tolist()
+    return out
 
 
 def cap_reference_rows(
@@ -242,7 +373,9 @@ def cap_reference_rows(
     return capped[:limit], resolved_labels
 
 
-_EXACT_FAMILIES = {"network", "tree", "ensemble"}
+_EXACT_FAMILIES = {"network", "tree", "ensemble", "composite"}
+# These hold parts of a model, and any one part predicts differently from the whole.
+_PART_ATTRS = {"estimators_", "final_estimator_", "calibrated_classifiers_", "named_estimators_"}
 _WRAPPER_ATTRS = (
     "best_estimator_",
     "estimator_",
@@ -298,8 +431,8 @@ def estimator_to_spec(
     """Return a ``kaimei.structure.v1`` document with every tensor inline as JSON lists.
 
     Reads a known fitted shape (linear / MLP / tree / forest / Keras / Torch). If this
-    object is a wrapper around one of those, the inner estimator is used — no
-    vendor-specific package names required. For large models prefer
+    object is a wrapper around one of those and predicts as it does, the inner estimator
+    is used — no vendor-specific package names required. For large models prefer
     :func:`extract_structure`, which lifts big tensors out for binary upload.
     """
     return extract_structure(
@@ -323,8 +456,12 @@ def extract_structure(
     externalize_above: Optional[int] = EXTERNALIZE_ABOVE,
     input_shape: Optional[Sequence[int]] = None,
     preprocess: Optional[Mapping[str, Any]] = None,
+    check_rows: Any = None,
 ) -> Extraction:
     """Read a fitted estimator into a spec plus the tensors to upload as binary.
+
+    ``check_rows`` are rows to compare the reading with the estimator on, besides the ones this picks itself. A model
+    can agree around zero and disagree on the data it actually sees.
 
     ``weights="summary"`` keeps the weights private: the spec carries shapes and statistics
     only, and the model is drawable but not executable on Kaimei.
@@ -335,7 +472,7 @@ def extract_structure(
     ``normalize`` layer, e.g. ``{"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}``
     for a torchvision model that expects ``Normalize`` on ``[0, 1]`` pixels.
     """
-    raw = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess)
+    raw = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess, check_rows)
     extraction = finalize_spec(raw, weights=weights, externalize_above=externalize_above)
     if externalize_above == EXTERNALIZE_ABOVE and spec_payload_bytes(extraction.spec) >= WARN_STRUCTURE_BYTES:
         # A CNN holds dozens of kernels under the default threshold (MobileNetV2: 16 MB of JSON).
@@ -351,16 +488,153 @@ def _extract_raw(
     framework: Optional[str],
     input_shape: Optional[Sequence[int]] = None,
     preprocess: Optional[Mapping[str, Any]] = None,
+    check_rows: Any = None,
 ) -> Dict[str, Any]:
-    """The spec with tensors still as numpy arrays (see :func:`finalize_spec`)."""
+    """The spec with tensors still as numpy arrays (see :func:`finalize_spec`), checked against the estimator."""
+    spec = _read_estimator(estimator, feature_names, task, framework, input_shape, preprocess)
+    _keep_layers_apart_from_features(spec)
+    return _checked(spec, estimator, check_rows)
+
+
+def _keep_layers_apart_from_features(spec: Dict[str, Any]) -> None:
+    """A layer and a feature are nodes of one graph, so they can't share a name, and a layer's matters less."""
+    for member in spec.get("members") or []:
+        _keep_layers_apart_from_features(member)
+    names = {str(name) for name in spec.get("feature_names") or []}
+    layers = spec.get("layers") or []
+    taken = names | {str(layer.get("id")) for layer in layers}
+    renamed: Dict[str, str] = {}
+    for layer in layers:
+        old = str(layer.get("id"))
+        if old in names:
+            at = 1
+            while f"{old}_layer_{at}" in taken:
+                at += 1
+            renamed[old] = f"{old}_layer_{at}"
+            taken.add(renamed[old])
+            layer["id"] = renamed[old]
+            layer.setdefault("label", old)
+    if renamed:
+        for layer in layers:
+            if layer.get("inputs"):
+                layer["inputs"] = [_renamed_source(str(source), renamed) for source in layer["inputs"]]
+
+
+def _renamed_source(source: str, renamed: Mapping[str, str]) -> str:
+    # A fused activation's output is written ``layer__activation``.
+    layer, joint, rest = source.partition("__")
+    return f"{renamed.get(layer, layer)}{joint}{rest}"
+
+
+def _names_it_was_fitted_on(estimator: Any) -> Optional[Sequence[str]]:
+    """Every library keeps these somewhere different, and what one makes up for a bare array isn't a name."""
+    found: Optional[List[Any]] = None
+    for attribute in ("feature_names_in_", "feature_names_", "feature_names"):
+        fitted = getattr(estimator, attribute, None)
+        if fitted is not None and not callable(fitted) and len(fitted):
+            found = list(fitted)
+            break
+    if found is None:
+        reader = getattr(estimator, "feature_name", None)  # A LightGBM Booster
+        if callable(reader):
+            try:
+                found = list(reader())
+            except Exception:
+                return None
+    if not found:
+        return None
+    named = [str(name) for name in found]
+    made_up = ([str(at) for at in range(len(named))], [f"Column_{at}" for at in range(len(named))])
+    return None if named in made_up else found
+
+
+def _checked(spec: Dict[str, Any], estimator: Any, check_rows: Any = None) -> Dict[str, Any]:
+    """Only a spec that gives the estimator's own numbers may run. Otherwise it is drawn, not run."""
+    spec["reader"] = READER
+    names = [str(name) for name in spec.get("feature_names") or []]
+    own = rows_to_check(check_rows, names)
+    if _is_keras_model(estimator) or _is_torch_module(estimator):
+        shape = image_shape_of(spec)
+        if shape is not None:
+            if not spec.get("approximate"):
+                _attach(spec, image_check(estimator, shape, _preprocess_of(spec)))
+            return spec
+        groups = [None, *far_rows(names), *([own] if own is not None else [])] if names else [None]
+        if not spec.get("approximate") and any(network_differs(spec, estimator, names, rows) for rows in groups):
+            spec["approximate"] = True
+            spec["summary"] = str(spec.get("summary") or "") + " This reading doesn't give the model's own outputs, so it is drawn, not run."
+        if not spec.get("approximate"):
+            _attach(spec, upload_check(spec, estimator, names, own))
+        return spec
+    if several_outputs(spec, names):
+        spec["approximate"] = True
+        spec["summary"] = str(spec.get("summary") or "") + " It has several outputs and a prediction reports one, so it is drawn, not run."
+    elif changes_how_it_predicts(estimator):
+        spec["approximate"] = True
+        spec["summary"] = str(spec.get("summary") or "") + " Its class changes how it predicts, which its learned numbers can't show, so it is drawn, not run."
+    elif any(
+        verify(spec, estimator, names, rows) is False
+        for rows in ([None, *far_rows(names), *([own] if own is not None else [])] if names else [None])
+    ):
+        spec["approximate"] = True
+        spec["summary"] = str(spec.get("summary") or "") + " This reading wasn't shown to match its output, so it is drawn, not run."
+    elif handles_missing(spec, estimator, names):
+        spec["missing_values"] = True
+    if not spec.get("approximate"):
+        _attach(spec, upload_check(spec, estimator, names, own))
+    return spec
+
+
+def _attach(spec: Dict[str, Any], check: Optional[Dict[str, Any]]) -> None:
+    if check is not None:
+        spec["check"] = check
+
+
+def _preprocess_of(spec: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    """The normalization baked into an image model's graph, which its own module doesn't apply."""
+    for layer in spec.get("layers") or []:
+        if str(layer.get("id")) == "preprocess":
+            return layer
+    return None
+
+
+def _read_member(member: Any, names: List[str], task: Optional[str], framework: Optional[str]) -> Dict[str, Any]:
+    return _read_estimator(member, names, task, framework)
+
+
+def _read_estimator(
+    estimator: Any,
+    feature_names: Optional[Sequence[str]],
+    task: Optional[str],
+    framework: Optional[str],
+    input_shape: Optional[Sequence[int]] = None,
+    preprocess: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     _require_numpy()
     candidates = list(_iter_estimators(estimator))
     names: List[str]
     if feature_names is not None:
         names = [str(name) for name in feature_names]
+        width = _input_width(estimator)
+        if width is not None and width != len(names):
+            raise StructureError(
+                f"This estimator reads {width} features, got {len(names)} names.",
+                code="invalid_structure",
+                param="feature_names",
+            )
+        fitted = _names_it_was_fitted_on(estimator)
+        if fitted is not None:
+            order = [str(name) for name in list(fitted)]
+            if any(name in order and order.index(name) != at for at, name in enumerate(names)):
+                # Each number would be read as a different feature, and nothing about the model looks wrong.
+                raise StructureError(
+                    f"feature_names is in a different order from the one this estimator was fitted on: {order}.",
+                    code="invalid_structure",
+                    param="feature_names",
+                )
     else:
         inferred: Optional[List[str]] = None
-        for candidate in candidates:
+        for candidate in _iter_estimators(estimator, parts=True):
             try:
                 inferred = _infer_names(candidate)
                 break
@@ -393,9 +667,12 @@ def _extract_raw(
     if best is None:
         raise StructureError(
             "Cannot read this estimator. Supported shapes: linear coefficients, MLP coefs_, "
-            "a decision tree, a forest, a StandardScaler pipeline around those, a Keras / "
-            "TensorFlow model, a torch.nn module, or an estimator with feature_importances_. "
-            "Wrappers around any of those are also accepted.",
+            "any tree model (scikit-learn, XGBoost, LightGBM, CatBoost), a vote, stack, bag or "
+            "calibration of models, a scaler pipeline around those, a Keras / TensorFlow model, "
+            "a torch.nn module, or an estimator with feature_importances_. "
+            "Wrappers around any of those are also accepted, unless they change the prediction: "
+            "voting, stacking, calibration and target transforms aren't read as their parts. "
+            "Those need a remote scoring URL or pre-computed attributions.",
             code="unsupported_estimator",
         )
     if framework is None:
@@ -422,6 +699,15 @@ def _direct_spec(
         return _pipeline_to_spec(estimator, names, task, framework)
     if hasattr(estimator, "coefs_") and hasattr(estimator, "intercepts_"):
         return _mlp_to_spec(estimator, names, task, framework)
+    try:
+        combined = ensemble_spec(estimator, names, task, framework, _read_member)
+        if combined is not None:
+            return combined
+    except Unreadable:
+        pass
+    except StructureError as exc:
+        if exc.code != "unsupported_estimator":
+            raise
     if hasattr(estimator, "estimators_"):
         try:
             return _forest_to_spec(estimator, names, task, framework)
@@ -429,6 +715,11 @@ def _direct_spec(
             if exc.code != "unsupported_estimator":
                 raise
     if hasattr(estimator, "tree_"):
+        if int(estimator.tree_.node_count) > FLAT_TREE_NODES:
+            try:
+                return flat_tree_spec(estimator, names, task, framework)
+            except Unreadable as exc:
+                raise StructureError(str(exc), code="unsupported_estimator") from exc
         return _tree_to_spec(estimator, names, task, framework)
     if hasattr(estimator, "coef_") and hasattr(estimator, "intercept_"):
         return _linear_to_spec(estimator, names, task, framework)
@@ -451,8 +742,11 @@ def _direct_spec(
     return None
 
 
-def _iter_estimators(root: Any) -> List[Any]:
-    """Breadth-first walk of conventional wrapper attributes and fitted children."""
+def _iter_estimators(root: Any, parts: bool = False) -> List[Any]:
+    """Breadth-first walk of conventional wrapper attributes and fitted children.
+
+    Only what predicts as ``root`` does is walked, unless ``parts`` also asks for ensemble members.
+    """
     found: List[Any] = []
     queue: List[tuple] = [(root, 0)]
     seen = {id(root)}
@@ -461,7 +755,7 @@ def _iter_estimators(root: Any) -> List[Any]:
         found.append(current)
         if depth >= _MAX_UNWRAP_DEPTH:
             continue
-        for child in _child_estimators(current):
+        for child in _child_estimators(current, parts):
             marker = id(child)
             if marker in seen:
                 continue
@@ -470,11 +764,13 @@ def _iter_estimators(root: Any) -> List[Any]:
     return found
 
 
-def _child_estimators(estimator: Any) -> List[Any]:
+def _child_estimators(estimator: Any, parts: bool = False) -> List[Any]:
     children: List[Any] = []
     seen: set = set()
 
     def _add(value: Any) -> None:
+        if not parts and isinstance(value, (list, tuple, dict)):
+            return
         for item in _expand_estimator(value):
             marker = id(item)
             if marker in seen or item is estimator:
@@ -482,8 +778,14 @@ def _child_estimators(estimator: Any) -> List[Any]:
             seen.add(marker)
             children.append(item)
 
+    if not parts and str(type(estimator).__module__).startswith("sklearn."):
+        # sklearn's meta-estimators calibrate, transform or select around the estimator they hold,
+        # so it predicts differently from them. A search's best estimator and these two don't.
+        delegates = type(estimator).__name__ in {"RANSACRegressor", "SelfTrainingClassifier"}
+        _add(_safe_attr(estimator, "estimator_" if delegates else "best_estimator_"))
+        return children
     for name in _WRAPPER_ATTRS:
-        if name in _SKIP_UNWRAP_ATTRS:
+        if name in _SKIP_UNWRAP_ATTRS or (not parts and name in _PART_ATTRS):
             continue
         _add(_safe_attr(estimator, name))
     values = getattr(estimator, "__dict__", None)
@@ -552,11 +854,24 @@ def _safe_attr(obj: Any, name: str) -> Any:
         return None
 
 
+def _input_width(estimator: Any) -> Optional[int]:
+    """How many features the fitted estimator says it reads, when it says."""
+    for name in ("n_features_in_", "num_feature", "num_features"):
+        try:
+            value = getattr(estimator, name, None)
+            value = value() if callable(value) else value
+        except Exception:
+            continue
+        if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+            return int(value)
+    return None
+
+
 def _infer_names(estimator: Any) -> List[str]:
-    existing = getattr(estimator, "feature_names_in_", None)
+    existing = _names_it_was_fitted_on(estimator)
     if existing is not None:
         return [str(name) for name in list(existing)]
-    width = getattr(estimator, "n_features_in_", None)
+    width = _input_width(estimator)
     if width is None and hasattr(estimator, "coef_"):
         coef = np.asarray(estimator.coef_)
         width = int(coef.shape[-1])
@@ -616,6 +931,9 @@ def _linear_to_spec(
     if labels:
         spec["labels"] = labels
         spec["outputs"] = {"labels": labels}
+    if classes is not None and not callable(_safe_attr(estimator, "predict_proba")):
+        # Scores this model only separates with. It has no probabilities for them to match.
+        spec["uncalibrated"] = True
     return spec
 
 
@@ -697,7 +1015,9 @@ def _tree_to_spec(
         node: Dict[str, Any] = {"id": f"{id_prefix}{index}", "leaf": leaf, "output": output}
         if not leaf:
             node["feature"] = feature
-            node["threshold"] = float(tree.threshold[index])
+            node["threshold"] = max(-NO_LIMIT, min(NO_LIMIT, float(tree.threshold[index])))
+            if getattr(tree, "missing_go_to_left", None) is not None:
+                node["missing_left"] = bool(tree.missing_go_to_left[index])
             node["left"] = f"{id_prefix}{left}"
             node["right"] = f"{id_prefix}{right}"
         nodes.append(node)
@@ -711,6 +1031,7 @@ def _tree_to_spec(
         "root": f"{id_prefix}0",
         "nodes": nodes,
         "summary": f"Decision tree with {len(nodes)} nodes, read from tree_.",
+        "float32": True,
     }
     if classes is not None:
         spec["classes"] = classes
@@ -718,9 +1039,27 @@ def _tree_to_spec(
     return spec
 
 
+def _averages_its_trees(estimator: Any, width: int) -> bool:
+    """Whether the estimator predicts the plain mean of its members, which is how a forest spec runs."""
+    classes = {cls.__name__ for cls in type(estimator).__mro__}
+    if classes & {"ForestClassifier", "ForestRegressor"}:
+        return True
+    if classes & {"BaggingClassifier", "BaggingRegressor"}:
+        # Each member sees its own columns, which line up with the inputs only when all are kept in order.
+        columns = _safe_attr(estimator, "estimators_features_")
+        return columns is not None and all(np.array_equal(item, np.arange(width)) for item in columns)
+    if classes & {"VotingClassifier", "VotingRegressor"}:
+        return _safe_attr(estimator, "weights") is None and getattr(estimator, "voting", "soft") == "soft"
+    if classes & {"BaseEnsemble", "_BaseHeterogeneousEnsemble"}:
+        return False
+    return not str(type(estimator).__module__).startswith("sklearn.")
+
+
 def _forest_to_spec(
     estimator: Any, names: List[str], task: Optional[str], framework: Optional[str]
 ) -> Dict[str, Any]:
+    if not _averages_its_trees(estimator, len(names)):
+        raise StructureError("This ensemble is not a plain average of its members.", code="unsupported_estimator")
     members = []
     for member in estimator.estimators_:
         if hasattr(member, "tree_"):
@@ -735,7 +1074,7 @@ def _forest_to_spec(
     if classes is not None and resolved is None:
         resolved = "binary_classification" if len(classes) == 2 else "multiclass_classification"
     resolved = resolved or "regression"
-    if len(members) <= 30 and total <= 4000:
+    if len(members) <= INLINE_TREES and total <= INLINE_NODES:
         trees = []
         for index, member in enumerate(members):
             spec = _tree_to_spec(member, names, resolved, framework, id_prefix=f"t{index}_")
@@ -751,18 +1090,21 @@ def _forest_to_spec(
             "outputs": {"labels": classes} if classes else None,
             "trees": trees,
             "summary": f"Forest of {len(members)} trees.",
+            "float32": True,
         }
-    importances = np.asarray(getattr(estimator, "feature_importances_", []), dtype=float).ravel()
-    return {
-        "format": "kaimei.structure.v1",
-        "family": "ensemble_summary",
-        "framework": framework or "sklearn",
-        "task": resolved,
-        "feature_names": names,
-        "n_estimators": len(members),
-        "importances": importances.tolist(),
-        "classes": classes,
-    }
+    try:
+        return flat_forest_spec(estimator, members, names, task, framework)
+    except Unreadable as exc:
+        raise StructureError(str(exc), code="unsupported_estimator") from exc
+
+
+def _flat_steps(steps: List[Any]) -> List[Any]:
+    """A pipeline's steps, with any pipeline among them opened up."""
+    flat: List[Any] = []
+    for name, step in steps:
+        inner = getattr(step, "steps", None)
+        flat.extend(_flat_steps(list(inner)) if inner else [(name, step)])
+    return flat
 
 
 def _pipeline_to_spec(
@@ -770,11 +1112,34 @@ def _pipeline_to_spec(
 ) -> Dict[str, Any]:
     steps = list(estimator.steps)
     if len(steps) < 2:
-        return _extract_raw(steps[-1][1], names, task, framework)
+        return _read_estimator(steps[-1][1], names, task, framework)
     *preprocessors, final = steps
+    preprocessors = _flat_steps(preprocessors)
     center = None
     scale = None
+    scalers: List[Any] = []
+    imputed: Any = None
     for step_name, step in preprocessors:
+        if step is None or step == "passthrough":
+            continue
+        if type(step).__name__ == "SimpleImputer":
+            if getattr(step, "add_indicator", False):
+                raise StructureError(f"Pipeline step '{step_name}' adds columns.", code="unsupported_estimator", param="steps")
+            marker = getattr(step, "missing_values", float("nan"))
+            if not (isinstance(marker, float) and marker != marker):
+                # Then real numbers get replaced, which a reading without the imputer would get wrong.
+                raise StructureError(
+                    f"Pipeline step '{step_name}' replaces the value {marker!r}, which can't be read as part of the model.",
+                    code="unsupported_estimator",
+                    param="steps",
+                )
+            if imputed is None:
+                # In the units of what comes in, undoing any scaler before it.
+                fills = np.asarray(getattr(step, "statistics_", []), dtype=float)
+                if fills.size != len(names) or np.isnan(fills).any():
+                    raise StructureError(f"Pipeline step '{step_name}' drops columns.", code="unsupported_estimator", param="steps")
+                imputed = fills if center is None or scale is None else center + scale * fills
+            continue
         found = _scaler_arrays(step)
         if found is None:
             raise StructureError(
@@ -782,25 +1147,108 @@ def _pipeline_to_spec(
                 code="unsupported_estimator",
                 param="steps",
             )
-        center, scale = found
-    assert center is not None and scale is not None
+        # Two in a row fold into one: (x - a) / b, then (that - c) / d.
+        center, scale = found if center is None or scale is None else (center + scale * found[0], scale * found[1])
+        scalers.append(step)
     final_estimator = final[1]
-    spec = _extract_raw(final_estimator, names, task, framework)
-    if spec.get("family") == "tree":
-        _fold_scaler(spec["nodes"], center, scale)
+    spec = _read_estimator(final_estimator, names, task, framework)
+    if center is not None and scale is not None and spec.get("baselines"):
+        # An imputer further in fills in that pipeline's units, and what comes in is in these.
+        spec["baselines"] = {
+            name: float(center[names.index(name)] + scale[names.index(name)] * value)
+            for name, value in spec["baselines"].items()
+        }
+    if imputed is not None:
+        # A missing value takes what the imputer fills in, which is what a feature's baseline does with a null.
+        spec["missing_values"] = False
+        spec["baselines"] = {name: float(value) for name, value in zip(names, imputed)}
+    if center is None or scale is None:
+        return spec
+    return _apply_scaler(spec, names, center, scale, through_scalers(scalers, len(names)))
+
+
+def _apply_scaler(spec: Dict[str, Any], names: List[str], center: Any, scale: Any, scaled: Any) -> Dict[str, Any]:
+    """The same model reading unscaled inputs: folded into splits, or as a first layer."""
+    family = spec.get("family")
+    own = [str(name) for name in spec.get("feature_names") or names]
+    picks = [names.index(name) for name in own if name in names]
+    if len(picks) != len(own):
+        raise StructureError("A pipeline's scaler doesn't line up with its model's inputs.", code="invalid_structure")
+    center = np.asarray(center, dtype=float)[picks]
+    scale = np.asarray(scale, dtype=float)[picks]
+
+    def own_scaled(column: int, values: Any) -> Any:
+        return scaled(picks[column], values)
+
+    if family == "ensemble_summary":
+        return spec  # Importances belong to the input columns, which a scaler doesn't reorder.
+    if family == "tree":
+        _fold_scaler(spec["nodes"], center, scale, own_scaled, bool(spec.get("float32")))
+        spec["float32"] = False
         spec["summary"] = "Standardizer folded into the split thresholds, so the tree reads raw features."
         return spec
-    if spec.get("family") not in {None, "network"}:
+    if family == "ensemble" and spec.get("trees"):
+        for tree in spec["trees"]:
+            _fold_scaler(tree["nodes"], center, scale, own_scaled, bool(spec.get("float32")))
+        spec["float32"] = False
+        count = len(spec["trees"])
+        spec["summary"] = f"Standardizer folded into the split thresholds, so all {count} trees read raw features."
+        return spec
+    if family == "ensemble" and spec.get("forest") is not None:
+        forest = dict(spec["forest"])
+        feature = np.asarray(forest["feature"], dtype=np.int64)
+        threshold = np.asarray(forest["threshold"], dtype=float).copy()
+        split = feature >= 0
+        # A threshold standing in for infinity stays where it is: it separates missing values, not numbers.
+        real = split & (np.abs(threshold) < NO_LIMIT)
+        threshold[real] = moved_thresholds(
+            feature[real],
+            threshold[real],
+            center,
+            scale,
+            own_scaled,
+            single=bool(forest.get("float32")),
+            strict=bool(forest.get("strict")),
+        )
+        forest["threshold"] = threshold
+        forest["float32"] = False
+        spec["forest"] = forest
+        if forest.get("missing_value") is not None:
+            # A row holds the library's marker only once it's scaled, so no one number coming in stands for it.
+            spec["approximate"] = True
+            spec["summary"] = (
+                str(spec.get("summary") or "")
+                + " Its marker for a missing value can't be read past the scaler, so it is drawn, not run."
+            )
+        return spec
+    if family == "composite":
+        combine = spec.get("combine") or {}
+        final = combine.get("final")
+        members = list(spec["members"])
+        for index, member in enumerate(members):
+            if index != final:
+                members[index] = _apply_scaler(member, own, center, scale, own_scaled)
+        if combine.get("passthrough") and final is not None:
+            members[final] = _scale_what_passes_through(members[final], combine, own, center, scale, own_scaled)
+        spec["members"] = members
+        return spec
+    if family not in {None, "network"}:
         raise StructureError(
-            "A scaler can precede a linear model, an MLP, or a single tree.",
+            "A scaler can precede a linear model, an MLP, a tree or a forest.",
             code="unsupported_estimator",
         )
     layers = list(spec["layers"])
+    taken = {str(layer.get("id")) for layer in layers}
+    scaler_id = next(
+        candidate
+        for candidate in ("standardize", *(f"standardize_{at}" for at in range(2, len(taken) + 3)))
+        if candidate not in taken
+    )
     scaler_layer = {
-        "id": "standardize",
+        "id": scaler_id,
         "type": "standardize",
-        "center": np.asarray(center, dtype=float),
-        "scale": np.asarray(scale, dtype=float),
+        "center": center,
+        "scale": scale,
         "label": "Standardize",
     }
     # Insert after the input layer.
@@ -811,35 +1259,78 @@ def _pipeline_to_spec(
     return spec
 
 
+def _scale_what_passes_through(
+    final: Dict[str, Any], combine: Dict[str, Any], names: List[str], center: Any, scale: Any, scaled: Any
+) -> Dict[str, Any]:
+    """A stack's last model reads its members' outputs as they are, and the inputs it passes through scaled."""
+    inputs = [str(name) for name in combine["final_inputs"]]
+    passed = {str(name) for name in combine["passthrough"]}
+    where = [names.index(name) if name in passed else -1 for name in inputs]
+
+    def final_scaled(column: int, values: Any) -> Any:
+        return scaled(where[column], values) if where[column] >= 0 else values
+
+    return _apply_scaler(
+        final,
+        inputs,
+        np.array([center[at] if at >= 0 else 0.0 for at in where]),
+        np.array([scale[at] if at >= 0 else 1.0 for at in where]),
+        final_scaled,
+    )
+
+
 def _scaler_arrays(step: Any) -> Optional[tuple]:
     if hasattr(step, "mean_") and hasattr(step, "scale_"):
-        return np.asarray(step.mean_, dtype=float), np.asarray(step.scale_, dtype=float)
+        # with_mean=False still fits mean_ but never subtracts it; with_std=False leaves scale_ empty.
+        fitted = step.mean_ if step.mean_ is not None else step.scale_
+        width = int(np.size(fitted)) if fitted is not None else int(step.n_features_in_)
+        keep_center = getattr(step, "with_mean", True) and step.mean_ is not None
+        keep_scale = getattr(step, "with_std", True) and step.scale_ is not None
+        return (
+            np.asarray(step.mean_, dtype=float) if keep_center else np.zeros(width),
+            np.asarray(step.scale_, dtype=float) if keep_scale else np.ones(width),
+        )
+    if hasattr(step, "center_") and hasattr(step, "scale_"):
+        # RobustScaler: either step can be switched off, which leaves its attribute empty.
+        width = int(np.size(step.center_ if step.center_ is not None else step.scale_))
+        return (
+            np.asarray(step.center_, dtype=float) if step.center_ is not None else np.zeros(width),
+            np.asarray(step.scale_, dtype=float) if step.scale_ is not None else np.ones(width),
+        )
+    if hasattr(step, "max_abs_") and hasattr(step, "scale_"):
+        scale = np.asarray(step.scale_, dtype=float)
+        return np.zeros(scale.size), scale
     if hasattr(step, "data_min_") and hasattr(step, "data_max_"):
+        if getattr(step, "clip", False):
+            raise StructureError("A clipping MinMaxScaler can't be folded into the structure.", code="unsupported_estimator")
         feature_range = tuple(getattr(step, "feature_range", (0, 1)))
         if feature_range != (0, 1):
-            raise StructureError(
-                "Only MinMaxScaler feature_range (0, 1) can be folded into the structure.",
-                code="unsupported_estimator",
-            )
+            # x * scale_ + min_, written as (x - center) / scale.
+            factor = np.asarray(step.scale_, dtype=float)
+            return -np.asarray(step.min_, dtype=float) / factor, 1.0 / factor
         low = np.asarray(step.data_min_, dtype=float)
         span = np.asarray(step.data_max_, dtype=float) - low
-        return low, np.where(np.abs(span) < 1e-12, 1.0, span)
+        return low, np.where(np.abs(span) < 10 * np.finfo(float).eps, 1.0, span)
     return None
 
 
-def _fold_scaler(nodes: List[Dict[str, Any]], center: np.ndarray, scale: np.ndarray) -> None:
-    for node in nodes:
-        if node.get("leaf"):
-            continue
-        index = int(node["feature"])
-        node["threshold"] = float(node["threshold"]) * float(scale[index]) + float(center[index])
+def _fold_scaler(nodes: List[Dict[str, Any]], center: np.ndarray, scale: np.ndarray, scaled: Any, single: bool) -> None:
+    splits = [node for node in nodes if not node.get("leaf") and abs(float(node["threshold"])) < NO_LIMIT]
+    if not splits:
+        return
+    feature = [int(node["feature"]) for node in splits]
+    threshold = [float(node["threshold"]) for node in splits]
+    moved = moved_thresholds(feature, threshold, center, scale, scaled, single=single)
+    for node, value in zip(splits, moved.tolist()):
+        node["threshold"] = value
 
 
 def _classes(estimator: Any) -> Optional[List[str]]:
     classes = getattr(estimator, "classes_", None)
     if classes is None:
         return None
-    return [str(label) for label in list(classes)]
+    # A CatBoost regressor has an empty classes_.
+    return [str(label) for label in list(classes)] or None
 
 
 def _supervised_head(classes: Optional[List[str]], task: Optional[str], n_rows: int) -> tuple:
@@ -1047,6 +1538,8 @@ def _torch_module_layers(name: str, module: Any, in_shape: Optional[Sequence[int
         return []
     if cls in _TORCH_ACTIVATIONS:
         act = _TORCH_ACTIVATIONS[cls]
+        if cls == "GELU" and getattr(module, "approximate", "none") != "tanh":
+            raise _Unsupported("GELU in its exact form")  # Kaimei runs the tanh form, too close for a check to tell.
         if cls == "Softmax" and (rank not in (None, 1) or getattr(module, "dim", -1) not in (None, 1, -1)):
             raise _Unsupported("Softmax over a spatial tensor")
         layer = {**base, "type": "activation", "activation": act}
@@ -1131,7 +1624,9 @@ def _torch_to_spec(
     image = _torch_image_shape(estimator, input_shape)
     if image is not None:
         return _torch_image_spec(estimator, names, task, framework, image, preprocess, torch)
-    resolved = task or "regression"
+    traced = _torch_traced_tabular(estimator, names, task, framework, torch)
+    if traced is not None:
+        return traced
     leaves = [
         (name, module)
         for name, module in estimator.named_modules()
@@ -1168,12 +1663,15 @@ def _torch_to_spec(
     modules = dict(leaves)
     layers: List[Dict[str, Any]] = [{"id": "input", "type": "input", "names": names or [f"x{i}" for i in range(1)]}]
     unsupported = False
+    uses: Dict[str, int] = {}
     for name in seen:
         module = modules.get(name)
         if module is None:
             continue
+        uses[name] = uses.get(name, 0) + 1
         try:
-            layers.extend(_torch_module_layers(name, module, None))
+            # A layer called twice is two steps of the same weights, and each step needs its own node.
+            layers.extend(_torch_module_layers(name if uses[name] == 1 else f"{name}.{uses[name]}", module, None))
         except _Unsupported:
             unsupported = True
             layers.append(
@@ -1185,6 +1683,13 @@ def _torch_to_spec(
                     "rate": 0,
                 }
             )
+    if not _layers_line_up(layers, len(names)):
+        raise StructureError(
+            "This model's forward() gives a layer something other than the layer before it, in a way Kaimei can't "
+            "read. Register it with a remote inference endpoint instead.",
+            code="unsupported_layers",
+        )
+    resolved, labels, _added = _classification_head(layers, task, None)
     spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
@@ -1197,9 +1702,26 @@ def _torch_to_spec(
         else "PyTorch module read in forward-hook order. Unrecognised layers are passed through.",
         "layers": layers,
     }
+    if labels:
+        spec["labels"] = labels
+        spec["outputs"] = {"labels": labels}
     if unsupported:
         spec["approximate"] = True
     return spec
+
+
+def _layers_line_up(layers: List[Dict[str, Any]], width: int) -> bool:
+    """Whether each dense layer in order takes what the one before gives. ``True`` for layers that aren't all dense."""
+    for layer in layers:
+        kind = layer.get("type")
+        if kind == "dense":
+            shape: Tuple[int, ...] = np.shape(layer["weight"]) if layer.get("weight") is not None else ()
+            if width and len(shape) == 2 and shape[1] != width:
+                return False
+            width = int(layer.get("units") or width)
+        elif kind not in {"input", "activation", "dropout", "batchnorm", "layernorm"}:
+            return True
+    return True
 
 
 def _torch_image_spec(
@@ -1255,6 +1777,48 @@ def _torch_image_spec(
 
 class _Untraceable(Exception):
     """``torch.fx`` could not trace the module."""
+
+
+def _torch_traced_tabular(
+    estimator: Any, names: List[str], task: Optional[str], framework: Optional[str], torch: Any
+) -> Optional[Dict[str, Any]]:
+    """A tabular module read op by op, so ``F.relu`` and a residual add are seen. ``None`` when it can't be."""
+    if not names:
+        return None
+    module = getattr(estimator, "eval", lambda: estimator)()
+    try:
+        body, approximate, final_shape = _torch_fx_layers(module, torch.zeros(2, len(names)), "input", torch)
+    except (_Untraceable, StructureError):
+        return None
+    if approximate or not body:
+        return None
+    previous = "input"
+    layers: List[Dict[str, Any]] = [{"id": "input", "type": "input", "names": names}]
+    for layer in body:
+        sources = list(layer.get("inputs") or [previous])
+        item = {key: value for key, value in layer.items() if key != "inputs"}
+        if sources != [previous]:
+            item["inputs"] = sources
+        layers.append(item)
+        previous = str(layer.get("id"))
+    resolved, labels, added = _classification_head(layers, task, final_shape)
+    summary = "PyTorch module traced op by op."
+    if added:
+        summary += f" A {added} turns the final logits into probabilities."
+    spec: Dict[str, Any] = {
+        "format": "kaimei.structure.v1",
+        "family": "network",
+        "framework": framework or "pytorch",
+        "architecture": "mlp",
+        "task": resolved,
+        "feature_names": names,
+        "summary": summary,
+        "layers": layers,
+    }
+    if labels:
+        spec["labels"] = labels
+        spec["outputs"] = {"labels": labels}
+    return spec
 
 
 def _torch_fx_layers(estimator: Any, example: Any, entry: str, torch: Any) -> tuple:
@@ -1430,6 +1994,8 @@ def _torch_call_layers(node: Any, in_shapes: List[Optional[List[int]]], out_shap
         return []  # torchvision StochasticDepth is the identity at inference
     if name in _TORCH_FUNCTIONS:
         act = _TORCH_FUNCTIONS[name]
+        if act == "gelu" and _arg(node, 1, "approximate", "none") != "tanh":
+            raise _Unsupported("GELU in its exact form")  # Kaimei runs the tanh form, too close for a check to tell.
         layer: Dict[str, Any] = {"type": "activation", "activation": act}
         if act == "softmax" and (rank != 1 or _arg(node, 1, "dim", -1) not in (1, -1)):
             raise _Unsupported("softmax over a spatial tensor")
@@ -1532,6 +2098,8 @@ def _torch_arithmetic(
                 raise _Unsupported("add with broadcasting")
             return [{"type": "add"}]
         if kind == "mul":
+            if len(in_shapes[0] or []) == 1 and in_shapes[0] != in_shapes[1]:
+                raise _Unsupported("multiply with broadcasting")
             return [{"type": "multiply"}]
         raise _Unsupported(f"{kind} of two tensors")
     constant = next((_number(operand) for operand in operands if not hasattr(operand, "meta")), None)
@@ -1618,11 +2186,32 @@ def _preprocess_layer(layers: List[Dict[str, Any]], preprocess: Optional[Mapping
     return "preprocess"
 
 
+def _output_width(layers: List[Dict[str, Any]]) -> int:
+    """How many numbers the layers end in, following what keeps a width and what joins several."""
+    places = {key: at for at, layer in enumerate(layers) for key in (str(layer.get("id")), _out(layer))}
+
+    def width(at: int) -> int:
+        layer = layers[at]
+        kind = layer.get("type")
+        if layer.get("units"):
+            return int(layer["units"])
+        if kind == "input":
+            return len(layer.get("names") or [])
+        if at == 0 or kind not in ("activation", "dropout", "add", "multiply", "concat", "concatenate"):
+            return 0
+        sources = [places[str(source)] for source in layer.get("inputs") or [] if str(source) in places] or [at - 1]
+        return sum(width(source) for source in sources) if kind in ("concat", "concatenate") else width(sources[0])
+
+    return width(len(layers) - 1) if layers else 0
+
+
 def _classification_head(layers: List[Dict[str, Any]], task: Optional[str], final_shape: Optional[List[int]]) -> tuple:
     """Resolve the task and, for classifiers that end in logits, append the softmax / sigmoid."""
     last = layers[-1] if layers else {}
-    act = last.get("activation") if last.get("type") in ("dense", "conv2d", "activation") else None
-    width = int(np.prod(final_shape)) if final_shape else int(last.get("units") or 0)
+    # Dropout does nothing here, so what comes before it says what the output is.
+    shown: Dict[str, Any] = next((layer for layer in reversed(layers) if layer.get("type") != "dropout"), {})
+    act = shown.get("activation") if shown.get("type") in ("dense", "conv2d", "activation") else None
+    width = int(np.prod(final_shape)) if final_shape else _output_width(layers)
     resolved = task
     if resolved is None:
         if act == "softmax" and width > 1:
@@ -1669,6 +2258,8 @@ def _classification_head(layers: List[Dict[str, Any]], task: Optional[str], fina
                 }
             )
             added = "softmax"
+        if width == 2:
+            labels = ["negative", "positive"]  # Two numbers for two classes, not two outputs.
     return resolved, labels, added
 
 
@@ -1727,7 +2318,11 @@ def features_from_spec(spec: Dict[str, Any], value_range: Optional[Sequence[floa
         if value_range is not None:
             feature["value_range"] = [float(value_range[0]), float(value_range[1])]
         return [feature]
-    return [{"name": name, "type": "numeric"} for name in names]
+    if spec.get("missing_values"):
+        # The check found the library scores these, and this reading takes the same branches for them.
+        return [{"name": name, "type": "numeric", "allow_missing": True} for name in names]
+    fills = spec.get("baselines") or {}
+    return [{"name": name, "type": "numeric", **({"baseline": fills[name]} if name in fills else {})} for name in names]
 
 
 def image_shape_of(spec: Mapping[str, Any]) -> Optional[List[int]]:
@@ -1905,7 +2500,9 @@ def _keras_to_spec(
     if classes is not None and resolved is None:
         resolved = "binary_classification" if len(classes) == 2 else "multiclass_classification"
     if resolved is None:
-        last = list(estimator.layers)[-1]
+        # Dropout does nothing here, so what comes before it says what the output is.
+        kept = [layer for layer in estimator.layers if type(layer).__name__ not in _KERAS_PASSTHROUGH]
+        last = kept[-1] if kept else list(estimator.layers)[-1]
         units = int(getattr(last, "units", 0) or 0)
         act = _keras_activation(last)
         if act == "sigmoid" and units <= 1:
@@ -1940,14 +2537,10 @@ def _keras_to_spec(
         layers.append({"id": "output", "type": "dropout", "rate": 0, "label": "Output", "inputs": [outputs[0]]})
     conv = any(layer.get("type") == "conv2d" for layer in layers)
     added = None
-    if image or state.graph:
-        width = int(layers[-1].get("units") or 0) or (len(classes) if classes else 0)
-        resolved_head, head_labels, added = _classification_head(layers, resolved, [width] if width else None)
-        if classes is None and head_labels:
-            classes = head_labels
-    elif resolved == "multiclass_classification" and classes is None:
-        units = int(layers[-1].get("units") or 0)
-        classes = [f"class_{i}" for i in range(units)] if units else None
+    width = _output_width(layers) or (len(classes) if classes else 0)
+    resolved_head, head_labels, added = _classification_head(layers, resolved, [width] if width else None)
+    if classes is None and head_labels:
+        classes = head_labels
     spec: Dict[str, Any] = {
         "format": "kaimei.structure.v1",
         "family": "network",
@@ -2104,6 +2697,8 @@ def _keras_emit_layer(layer: Any, sources: List[str], prefix: str, state: _Keras
             return sources[:1]
     if not converted:
         return sources[:1]
+    if any(item.get("activation") == "gelu" for item in converted):
+        state.approximate = True  # Keras means the exact form. Kaimei runs the tanh form, too close to tell apart.
     previous = list(sources)
     for layer_spec in converted:
         layer_spec = dict(layer_spec)
@@ -2370,6 +2965,14 @@ def rows_from_inputs(
         return _image_rows(X, names, image_shape)
     if hasattr(X, "to_dict") and hasattr(X, "columns"):
         resolved = [str(name) for name in names] if names is not None else [str(col) for col in list(X.columns)]
+        absent = [name for name in resolved if name not in {str(col) for col in list(X.columns)}]
+        if absent:
+            # Each row would hold nothing for it, and on a model that reads gaps that looks like real data.
+            raise StructureError(
+                f"X has no column {absent[0]!r}. Its columns have to be the model's features: {resolved[:6]}.",
+                code="invalid_reference_rows",
+                param="X",
+            )
         records = X.to_dict(orient="records")
         return [{key: row.get(key) for key in resolved} for row in records], resolved
     if isinstance(X, list) and X and isinstance(X[0], Mapping):

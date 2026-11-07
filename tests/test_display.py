@@ -55,6 +55,8 @@ def _rich_mode(monkeypatch):
 def test_numbers_format_as_the_dashboard_formats_them():
     assert fmt_number(1234.5, 3) == "1,234.5"
     assert fmt_number(0.252, 3) == "0.252"
+    assert fmt_number(2.5e-8, 3) == "2.5e-8"
+    assert fmt_number(0.4, 0) == "0"
     assert fmt_number(0.0, 3) == "0"
     assert fmt_number(None) == "—"
     assert compact(12345) == "12.3K"

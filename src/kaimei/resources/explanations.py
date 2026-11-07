@@ -34,9 +34,12 @@ class Explanations(Resource):
         default: the last convolutional feature map). Image explanations return
         ``options["heatmap"]``, a grid in ``[-1, 1]`` (``[0, 1]`` for Grad-CAM) covering the image.
         """
+        row = dict(input)
+        if attributions is None:
+            self._check_gaps(model, row)
         body: Dict[str, Any] = {
             "model": model,
-            "input": dict(input),
+            "input": row,
             "prediction_id": prediction_id,
             "method": method,
             "options": dict(options) if options else None,
