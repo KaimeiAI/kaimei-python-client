@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0 — 2026-11-07
+
+Needs the API release that compiles `opaque` layers: deploy that first.
+
+### Changed
+
+- **Every PyTorch and Keras model uploads and is drawn.** A layer or operation Kaimei cannot replay (attention,
+  `matmul`, a reshape to another rank, a channel shuffle, a module of your own) becomes an `opaque` step in the spec:
+  the framework's own name for it, its attributes, its output shape and its tensors, which the dashboard draws and
+  lists like any other layer. The model is then drawn, not run, and its summary says which steps and why. Before,
+  such models were refused with `unsupported_layers`; `on_unsupported="error"` on `upload`, `upload_structure`,
+  `extract_structure` and `estimator_to_spec` keeps that behaviour.
+- Dense PyTorch models that `torch.fx` can trace keep their op-by-op reading even when a step is drawn, so a
+  residual add or a functional activation next to it still runs the way the code says.
+- `kaimei.structure.drawn_steps(spec)` lists the steps of a spec that are drawn but not replayed.
+- **Every spec says where it came from.** `metadata` on the spec records the model's class, the framework and
+  its version, the Python version, this client's version and when it was read; `extract_structure(metadata=...)`
+  and `upload_structure(metadata=...)` add your own entries. The API keeps it on the structure document, and the
+  dashboard shows it under Details. (`upload(metadata=...)` is still the model's own metadata.)
+- Parameters in the structure document carry their stored precision (`dtype`: `f16`, `f32` or `f64`).
+
 ## 0.7.2 — 2026-11-07
 
 Needs the API release that understands flat forests and composites: deploy that first.

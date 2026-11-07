@@ -479,7 +479,7 @@ def test_a_torch_model_whose_layers_share_names_with_its_features_keeps_its_wiri
             assert str(source).split("__")[0] in ids
 
 
-def test_layers_that_cant_be_lined_up_are_refused_with_a_reason():
+def test_layers_that_cant_be_replayed_are_drawn_and_can_be_refused_with_a_reason():
     torch = pytest.importorskip("torch")
 
     class Gated(torch.nn.Module):
@@ -491,8 +491,17 @@ def test_layers_that_cant_be_lined_up_are_refused_with_a_reason():
         def forward(self, x):
             return self.last(x * torch.sigmoid(self.gate(x)))
 
-    with pytest.raises(StructureError, match="something other than the layer before"):
-        estimator_to_spec(Gated().eval(), feature_names=NAMES)
+    # The gate broadcasts one number over four: Kaimei cannot replay that, so the step is drawn and
+    # the model is drawn, not run, with the inputs it really reads.
+    spec = estimator_to_spec(Gated().eval(), feature_names=NAMES)
+    assert spec["approximate"] is True
+    (mul,) = [layer for layer in spec["layers"] if layer["type"] == "opaque"]
+    assert mul["op"] == "mul" and mul["reason"] == "multiply with broadcasting" and mul["shape"] == [4]
+    sigmoid = next(layer["id"] for layer in spec["layers"] if layer.get("activation") == "sigmoid")
+    assert set(mul["inputs"]) == {"input", sigmoid}
+    assert spec["layers"][-1]["id"] == "last" and spec["layers"][-1].get("inputs", [mul["id"]]) == [mul["id"]]
+    with pytest.raises(StructureError, match="multiply with broadcasting"):
+        estimator_to_spec(Gated().eval(), feature_names=NAMES, on_unsupported="error")
 
 
 def _rows_on_every_split(spec, width):
