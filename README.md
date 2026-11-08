@@ -28,7 +28,7 @@ print(explanation.top_features)
 # 0.81 decline  |  credit_score -0.22
 ```
 
-The same call as `POST https://api.kaimei.ai/v1/explanations`. See [kaimei.ai](https://kaimei.ai) for the language-agnostic REST examples and the [API reference](https://api.kaimei.ai/docs) for every endpoint.
+The same call as `POST https://api.kaimei.ai/v1/explanations`. See [kaimei.ai](https://kaimei.ai) for the language-agnostic REST examples and the [API reference](https://kaimei.ai/docs/api.html) for every endpoint.
 
 ## Documentation
 Our documentation page can be found here: [`Kaimei Docs`](https://kaimei.ai/docs/)
@@ -321,6 +321,17 @@ client.predictions.create(model="credit-risk-v3", input={...}, output={"score": 
 
 # Explain one input. method is "shap" (KernelSHAP), "shapley", or "lime".
 client.explanations.create(model="credit-risk-v3", input={...}, method="shap")
+
+# Outcomes come back later: attach what really happened to the logged predictions
+prediction = client.predictions.create(model="credit-risk-v3", input={...}, output={"label": "approve", "probability": 0.81})
+client.predictions.log_actual(prediction.id, "default")
+client.predictions.log_actuals({"pred_123": "approve", "pred_124": "default"})  # or a pandas Series indexed by id
+
+# Quality against outcomes per week: AUC, accuracy, calibration, confusion matrix (MAE / RMSE for regressions)
+report = client.models.performance("credit-risk-v3", window="week", days=90)
+
+# Has quality dropped by more than chance explains? Also part of every full analysis.
+client.analyses.create(model="credit-risk-v3", type="performance")
 
 # Study the model as a whole, then read the insights
 analysis = client.analyses.create(model="credit-risk-v3", type="full")

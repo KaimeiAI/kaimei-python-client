@@ -114,6 +114,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
       interaction pairs, fragile features, learned rules, one row per grid point of each behaviour
       curve, histogram bins);
     - a model: its features;
+    - a performance report: one row per window;
     - a page: one row per item, nested fields flattened to dotted columns (``output.label``,
       ``attributions.Age``);
     - anything else: the record as one flattened row.
@@ -130,7 +131,13 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     if kind == "list":
         items = [flatten(item) for item in data.get("data") or [] if isinstance(item, Mapping)]
         return items, ["id", "object"]
+    if kind == "performance":
+        return [dict(w) for w in data.get("series") or [] if isinstance(w, Mapping)], list(_SERIES_COLUMNS)
     return [flatten(data)], []
+
+
+#: A performance series' columns, the window first.
+_SERIES_COLUMNS = ("start", "end", "n", "accuracy", "auc", "precision", "recall", "f1", "macro_f1", "mae", "rmse", "r2")
 
 
 def flatten(record: Mapping[str, Any], prefix: str = "") -> Dict[str, Any]:
@@ -207,6 +214,8 @@ def _insight_rows(data: Mapping[str, Any]) -> Tuple[List[Dict[str, Any]], List[s
         return _dicts(payload.get("fragile_features") or payload.get("features")), ["feature", "sensitivity"]
     if kind == "learned_rules":
         return _dicts(payload.get("rules")), ["statement"]
+    if kind == "performance":
+        return _dicts(payload.get("series")), list(_SERIES_COLUMNS)
     for key in ("features", "pairs", "rules", "items"):
         if isinstance(payload.get(key), list):
             return _dicts(payload[key]), ["feature", "share", "psi", "status"]

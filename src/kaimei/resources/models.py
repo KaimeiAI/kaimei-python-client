@@ -155,6 +155,15 @@ class Models(Resource):
     def stats(self, model: str, *, days: int = 30):
         return self._get(f"/v1/models/{model}/stats", {"days": days})
 
+    def performance(self, model: str, *, window: str = "week", days: int = 90):
+        """Quality against the outcomes attached to logged predictions: overall, and per ``day`` / ``week`` / ``month``.
+
+        ``overall`` holds the metrics (accuracy, precision, recall, F1, AUC, Brier, calibration and the confusion
+        matrix for a binary model; macro F1 and per-class numbers for multiclass; MAE, RMSE, bias and R² for a
+        regression); ``series`` the headline numbers per window; ``coverage`` the share of predictions with an outcome.
+        """
+        return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
+
     def upload_reference_data(
         self,
         model: str,

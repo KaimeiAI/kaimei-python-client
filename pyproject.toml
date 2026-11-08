@@ -49,7 +49,7 @@ Homepage = "https://kaimei.ai"
 Documentation = "https://github.com/KaimeiAI/kaimei-python-client#readme"
 Repository = "https://github.com/KaimeiAI/kaimei-python-client"
 Issues = "https://github.com/KaimeiAI/kaimei-python-client/issues"
-"API reference" = "https://api.kaimei.ai/docs"
+"API reference" = "https://kaimei.ai/docs/api.html"
 Examples = "https://github.com/KaimeiAI/titanic-kaimei-example"
 Changelog = "https://github.com/KaimeiAI/kaimei-python-client/blob/main/CHANGELOG.md"
 

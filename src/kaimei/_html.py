@@ -198,7 +198,10 @@ STATUS_TONE = {
     "stable": "ok",
     "moderate": "warn",
     "significant": "bad",
+    "degraded": "bad",
+    "improved": "ok",
 }
+METRIC_SHORT = {"auc": "AUC", "accuracy": "accuracy", "mae": "MAE"}
 #: A JSON array longer than this, or any nested one, is elided in the card's JSON view.
 _JSON_ARRAY_LIMIT = 12
 
@@ -964,6 +967,26 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
         if _float(payload.get("epsilon")) is not None:
             chips.append(_badge(f"ε {fmt_number(payload['epsilon'], 2)}", mono=True, title="Noise, as a fraction of each input's spread"))
         return _badges(chips) + _share_bars(rows[:limit])
+    if kind == "performance":
+        metric = str(payload.get("metric") or "")
+        current, baseline, comparison = _map(payload.get("current")), _map(payload.get("baseline")), _map(payload.get("comparison"))
+
+        def figure(value: Any) -> str:
+            return pct(value, 1) if metric == "accuracy" else fmt_number(value, 3)
+
+        name = METRIC_SHORT.get(metric, metric)
+        chips = []
+        if _float(current.get(metric)) is not None:
+            chips.append(_badge(f"{name} {figure(current[metric])} · {compact(current.get('n'))} recent", mono=True))
+        if _float(baseline.get(metric)) is not None:
+            chips.append(_badge(f"baseline {figure(baseline[metric])} · {compact(baseline.get('n'))}", mono=True))
+        status = payload.get("status")
+        if isinstance(status, str):
+            chips.append(_badge(status.replace("_", " "), STATUS_TONE.get(status, "")))
+        if _float(comparison.get("z")) is not None:
+            chips.append(_badge(f"z {fmt_number(comparison['z'], 2)}", mono=True, title="The change in standard errors; beyond ±1.96 it is more than chance"))
+        values = [v for v in (_float(w.get(metric)) for w in _dicts(payload.get("series"))) if v is not None]
+        return _badges(chips) + _sparkline(values, width=300, title=f"{name} per week")
     return ""
 
 
@@ -1064,6 +1087,13 @@ def _prediction(data: Mapping[str, Any]) -> str:
         _badge(f"{fmt_number(data['latency_ms'], 0)} ms", mono=True) if _float(data.get("latency_ms")) is not None else "",
         _badge(data["model_id"], mono=True, title="Model") if data.get("model_id") else "",
     ]
+    actual = _map(data.get("actual"))
+    if actual:
+        if actual.get("label") is not None:
+            happened, tone = str(actual["label"]), ("ok" if str(actual["label"]) == label else "bad")
+        else:
+            happened, tone = fmt_number(actual.get("value"), 3), ""
+        badges.append(_badge(f"actual {happened}", tone, title="What really happened"))
     out.append(_badges(badges))
     probabilities = output.get("probabilities")
     if isinstance(probabilities, Mapping) and len(probabilities) >= 2:

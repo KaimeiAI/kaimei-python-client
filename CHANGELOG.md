@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0 — 2026-11-08
+
+Needs the API release with outcomes and the `performance` analysis: deploy that first.
+
+### Added
+
+- **Outcomes and performance over time.** `predictions.create(actual=...)` logs what really happened with the
+  prediction; `predictions.log_actual(id, actual)` and `predictions.log_actuals(...)` attach it later, from a dict,
+  a list of `{"prediction_id", "actual"}` items or a pandas Series indexed by prediction id. Batches of any size are
+  sent 1,000 at a time; NaN and missing values are skipped, and an explicit `None` in a list clears an outcome.
+  A classifier's outcome is its class name, its position, or `True`/`False` for a binary model; a regression's is a
+  number.
+- `models.performance(model, window="week", days=90)` measures the model against outcomes: AUC, accuracy, precision,
+  recall, F1, Brier score and calibration for binary models; accuracy, macro F1, per-class numbers and a confusion
+  matrix for multiclass; MAE, RMSE, bias and R² for regressions; overall and per day, week or month.
+  `display.rows` turns its series into a table.
+- `analyses.create(type="performance")` compares the newest outcomes with the ones before them (or with the
+  labelled reference rows, `options={"baseline": "reference_data"}`) and raises a `high` insight when the drop is
+  larger than chance explains. Full analyses include it.
+- `predictions.list(has_actual=True)` lists only predictions with an outcome. Notebook cards show the outcome and the
+  performance insight.
+
 ## 0.8.0 — 2026-11-07
 
 Needs the API release that compiles `opaque` layers: deploy that first.
@@ -256,7 +278,7 @@ These change results for models you already have, and they don't depend on the c
 
 ### Documentation
 
-- README: an Examples section (the [Titanic example](https://github.com/KaimeiAI/titanic-kaimei-example), the scikit-learn and image examples); links to [kaimei.ai](https://kaimei.ai) and the [API reference](https://api.kaimei.ai/docs) instead of a repository that isn't public.
+- README: an Examples section (the [Titanic example](https://github.com/KaimeiAI/titanic-kaimei-example), the scikit-learn and image examples); links to [kaimei.ai](https://kaimei.ai) and the [API reference](https://kaimei.ai/docs) instead of a repository that isn't public.
 - Package metadata: the "API" link points at the public API reference, plus an "Examples" link.
 
 ## 0.6.2 — 2026-10-25
