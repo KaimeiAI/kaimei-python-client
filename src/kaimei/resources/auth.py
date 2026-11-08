@@ -51,6 +51,21 @@ class Auth(Resource):
             self._client.use_token(access)
         return session
 
+    def forgot_password(self, *, email: str, turnstile_token: Optional[str] = None) -> Any:
+        """Ask for a reset link. The response is the same when the email is not an account."""
+        return self._post(
+            "/v1/auth/forgot-password",
+            compact({"email": email, "turnstile_token": turnstile_token}),
+        )
+
+    def reset_password(self, *, token: str, password: str) -> APIObject:
+        """Set a new password from a reset link and sign in with it."""
+        session = self._post("/v1/auth/reset-password", {"token": token, "password": password})
+        access = getattr(session, "access_token", None)
+        if access:
+            self._client.use_token(access)
+        return session
+
     def resend_verification(self, *, email: str, turnstile_token: Optional[str] = None) -> Any:
         return self._post(
             "/v1/auth/resend-verification",

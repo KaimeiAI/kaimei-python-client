@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 — 2026-11-08
+
+Needs the API release with password reset: deploy that first.
+
+### Added
+
+- `auth.forgot_password` and `auth.reset_password` request a reset link and set a new password from it.
+
 ## 0.9.0 — 2026-11-08
 
 Needs the API release with outcomes and the `performance` analysis: deploy that first.
