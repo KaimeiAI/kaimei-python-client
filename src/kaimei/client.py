@@ -16,7 +16,7 @@ from .resources.organization import Organization
 from .resources.predictions import Predictions
 from .resources.projects import Projects
 
-__version__ = "1.0.1"
+__version__ = "0.9.2"
 
 
 class Kaimei:

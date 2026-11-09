@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.1 — 2026-11-08
+## 0.9.2 — 2026-11-08
 
-Tracks Kaimei API 1.0.1. The calls are the ones 0.9.1 already made. The API's compatibility policy applies: inside `/v1`, fields may be added, and existing fields keep their names and their meaning. Structure documents may now include `verification`.
+A 0.0.1 bump from 0.9.1. The calls are unchanged. Structure documents from API 1.0.1 may include `verification`.
 
 ## 0.9.1 — 2026-11-08
 
