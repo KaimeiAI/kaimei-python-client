@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.1 — 2026-11-08
+
+Tracks Kaimei API 0.0.1. The calls are the ones 0.9.1 already made. The API's compatibility policy applies: inside `/v1`, fields may be added, and existing fields keep their names and their meaning. Structure documents may now include `verification`.
+
 ## 0.9.1 — 2026-11-08
 
 Needs the API release with password reset: deploy that first.
