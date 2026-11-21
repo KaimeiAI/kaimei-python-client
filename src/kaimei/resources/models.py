@@ -541,3 +541,50 @@ class Models(Resource):
             raw=True,
         )
         return numpy.frombuffer(data, dtype="<f4").astype(numpy.float32)
+
+    def transfer(
+        self,
+        model: str,
+        *,
+        organization: str,
+        project: Optional[str] = None,
+        include_versions: bool = True,
+    ):
+        """Move a model, with every version and all of its history, to another organization you belong to.
+
+        ``project`` puts it in one of the destination's projects. Needs a session (``auth.login``) with an
+        owner or admin role where the model is now. The result lists the models as they are in the destination.
+        """
+        return self._post(
+            f"/v1/models/{model}/transfer",
+            compact({"organization": organization, "project": project, "include_versions": include_versions}),
+        )
+
+    def fork(
+        self,
+        model: str,
+        *,
+        organization: Optional[str] = None,
+        project: Optional[str] = None,
+        name: Optional[str] = None,
+        include_versions: bool = True,
+    ):
+        """Copy a model. Without ``organization`` the copy goes to your personal workspace, so name another
+        organization when the client is working in the personal workspace itself.
+
+        The copy holds the model's settings, versions, structure, weights and reference data. Predictions,
+        explanations, analyses and insights stay with the original. Credentials for the model's own
+        endpoint are not copied: ``credentials_removed`` lists the copies that need them saved again.
+        Needs a session (``auth.login``).
+        """
+        return self._post(
+            f"/v1/models/{model}/fork",
+            compact(
+                {
+                    "organization": organization,
+                    "project": project,
+                    "name": name,
+                    "include_versions": include_versions,
+                }
+            ),
+        )

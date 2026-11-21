@@ -72,6 +72,18 @@ class Auth(Resource):
             compact({"email": email, "turnstile_token": turnstile_token}),
         )
 
+    def switch(self, organization: str) -> APIObject:
+        """Work in another organization you belong to, by id or slug. ``"personal"`` is your own workspace.
+
+        Every later call reads and writes that organization. API keys do not switch: a key works in
+        the organization it was created in.
+        """
+        session = self._post("/v1/auth/switch", {"organization": organization})
+        access = getattr(session, "access_token", None)
+        if access:
+            self._client.use_token(access)
+        return session
+
     def me(self) -> APIObject:
         return self._get("/v1/auth/me")
 

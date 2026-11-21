@@ -34,3 +34,19 @@ class Projects(Resource):
 
     def delete(self, project: str):
         return self._delete(f"/v1/projects/{project}")
+
+    def transfer(self, project: str, *, organization: str) -> APIObject:
+        """Move a project and the models in it, with their history, to another organization you belong to.
+
+        Needs a session (``auth.login``) with an owner or admin role where the project is now.
+        """
+        return self._post(f"/v1/projects/{project}/transfer", {"organization": organization})
+
+    def fork(self, project: str, *, organization: Optional[str] = None, name: Optional[str] = None) -> APIObject:
+        """Copy a project and the models in it. Without ``organization`` the copy goes to your personal workspace,
+        so name another organization when the client is working in the personal workspace itself.
+
+        The copy holds each model's settings, structure, weights and reference data, and none of what was
+        logged against it. Needs a session (``auth.login``).
+        """
+        return self._post(f"/v1/projects/{project}/fork", compact({"organization": organization, "name": name}) or {})
