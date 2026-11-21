@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.10.0 — 2026-11-21
+
+The new calls need Kaimei API 1.1.0. Everything 0.9.2 did works as before, against 1.0.0 or 1.1.0.
+
+### Added
+
+- **Organizations.** An account has a personal workspace and can belong to organizations. `organizations.list()` and
+  `organizations.create(name=...)` list and create them, and `auth.switch("acme")` makes the client work in one
+  (`"personal"` goes back). These need a session from `auth.login`; an API key keeps working in the organization it
+  was created in.
+- `organization.members()`, `organization.update_member(user_id, role=...)` and `organization.remove_member(user_id)`
+  manage who is in the organization: `owner`, `admin`, `member` or `viewer`.
+- `organization.invite(email=..., role=...)` returns the invitation with its `invite_url`;
+  `organization.invitations()`, `organization.resend_invitation(id)` and `organization.revoke_invitation(id)` manage
+  them. The person invited uses `invitations.list()`, `invitations.accept(...)` and `invitations.decline(...)`.
+- `models.transfer(model, organization=...)` and `projects.transfer(project, organization=...)` move work, with its
+  history, to another organization. `models.fork(model)` and `projects.fork(project)` copy it, to your personal
+  workspace unless `organization` says otherwise.
+- `organization.delete(confirm=slug)` deletes a team organization.
+- **Joining by email domain.** `organization.join_domain()`, `organization.enable_join_domain(role=...)` and
+  `organization.disable_join_domain()` let anyone at an admin's own email domain join. Someone at that domain uses
+  `organizations.joinable()`, `organizations.join(organization_id)`, which emails them a confirmation link, and
+  `organizations.confirm_join(token)` with the token from that link.
+
 ## 0.9.2 — 2026-11-08
 
 A 0.0.1 bump from 0.9.1. The calls are unchanged. Structure documents may include `verification`.

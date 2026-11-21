@@ -13,10 +13,11 @@ from .resources.explanations import Explanations
 from .resources.insights import Insights
 from .resources.models import Models
 from .resources.organization import Organization
+from .resources.organizations import Invitations, Organizations
 from .resources.predictions import Predictions
 from .resources.projects import Projects
 
-__version__ = "0.9.2"
+__version__ = "0.10.0"
 
 
 class Kaimei:
@@ -66,6 +67,8 @@ class Kaimei:
         self.auth = Auth(self)
         self.api_keys = APIKeys(self)
         self.organization = Organization(self)
+        self.organizations = Organizations(self)
+        self.invitations = Invitations(self)
 
     @property
     def base_url(self) -> str:
