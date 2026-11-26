@@ -9,6 +9,7 @@ from .organization import Organization
 from .organizations import Invitations, Organizations
 from .predictions import Predictions
 from .projects import Projects
+from .reason_tables import ReasonTables
 
 __all__ = [
     "Analyses",
@@ -23,4 +24,5 @@ __all__ = [
     "Organizations",
     "Predictions",
     "Projects",
+    "ReasonTables",
 ]

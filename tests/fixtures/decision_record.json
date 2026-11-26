@@ -319,6 +319,99 @@
   "sentence": "Changing bureau credit score from 681 to 850 would move the chance of decline from 59.5% to 8.3%, which makes the outcome approve. Held fixed in the search: applicant age."
  },
  "view": null,
+ "reasons": {
+  "table": {
+   "id": "rt_5f745611edd6957896aa",
+   "version": 1,
+   "status": "retired",
+   "content_hash": "cc8b52cfa73b91874fe37c9db825c350ec9c30dc360945ee0972eace8b70045c",
+   "approved_at": "2026-10-27T22:00:39.738743Z",
+   "approved_by": {
+    "user_id": "usr_87d9df7f1a6b0afe769a",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   }
+  },
+  "adverse": {
+   "outcome": "decline"
+  },
+  "applies": true,
+  "sentence": "4 draft reasons for decline, strongest first. 2 inputs are held for review before these can be used.",
+  "reasons": [
+   {
+    "feature": "debt_to_income",
+    "label": "Total monthly debt / monthly income",
+    "display": "0.38",
+    "attribution": 0.07970604262568466,
+    "position": 1,
+    "reason": "Excessive obligations in relation to income",
+    "code": null,
+    "features": [
+     "debt_to_income"
+    ]
+   },
+   {
+    "feature": "num_delinquencies",
+    "label": "Delinquencies in the last 24 months",
+    "display": "1",
+    "attribution": 0.07483986997713922,
+    "position": 2,
+    "reason": "Delinquent past or present credit obligations with others",
+    "code": null,
+    "features": [
+     "num_delinquencies"
+    ]
+   },
+   {
+    "feature": "credit_score",
+    "label": "Bureau credit score",
+    "display": "681",
+    "attribution": 0.02091959996185499,
+    "position": 4,
+    "reason": "Credit score",
+    "code": null,
+    "features": [
+     "credit_score"
+    ]
+   },
+   {
+    "feature": "employment_years",
+    "label": "Years with current employer",
+    "display": "4 years",
+    "attribution": 0.007326759217992391,
+    "position": 6,
+    "reason": "Length of employment",
+    "code": null,
+    "features": [
+     "employment_years"
+    ]
+   }
+  ],
+  "more": [],
+  "held": [
+   {
+    "feature": "home_ownership",
+    "label": "Housing status",
+    "display": "rent",
+    "attribution": 0.0457483647176272,
+    "position": 3,
+    "why": "unmapped",
+    "sentence": "Housing status pushed toward decline and has no approved reason. Hold for review."
+   },
+   {
+    "feature": "age",
+    "label": "Applicant age",
+    "display": "34 years",
+    "attribution": 0.01277835351529626,
+    "position": 5,
+    "why": "never_state",
+    "sentence": "Applicant age pushed toward decline and must never be given as a reason (a prohibited basis under the Equal Credit Opportunity Act). Escalate for review."
+   }
+  ],
+  "clear": false,
+  "notes": [],
+  "notice": "Draft reasons, drawn from the model's explanation with wording your organization approved. They cover the model's part of the decision only. Whether they meet a notice requirement is for counsel."
+ },
  "notes": [],
  "limits": [
   {

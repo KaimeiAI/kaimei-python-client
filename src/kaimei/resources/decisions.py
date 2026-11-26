@@ -31,14 +31,21 @@ class Decisions(Resource):
     what would have changed the outcome, how it was computed, and a fingerprint of the stored facts.
     """
 
-    def retrieve(self, decision_id: str, *, explanation: Optional[str] = None) -> APIObject:
+    def retrieve(
+        self, decision_id: str, *, explanation: Optional[str] = None, reason_table: Union[str, int, None] = None
+    ) -> APIObject:
         """The record of one decision.
 
         It shows the newest explanation stored for the decision unless ``explanation`` names another. A decision
         that is logged and not explained has a record too, with ``status == "not_explained"``. Nothing is
         recomputed, so the same record has the same ``fingerprint`` every time.
+
+        When the model has an approved reason table, ``record.reasons`` holds the draft reasons for a decision
+        that went against the person, drawn with the version in force when it was made. ``reason_table="draft"``
+        draws them with the model's draft instead, to try wording before it is approved; a number picks a version.
         """
-        return self._get(_path(decision_id), compact({"explanation": explanation}))
+        params = {"explanation": explanation, "reason_table": None if reason_table is None else str(reason_table)}
+        return self._get(_path(decision_id), compact(params))
 
     def list(
         self,

@@ -112,6 +112,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
       same way (image explanations list their regions instead);
     - a decision record: one row per input's effect, strongest first, with the sentence that states it
       (a record that is not explained yet lists its inputs as recorded);
+    - a reason table: one row per input, with how it is treated and its approved wording;
     - an insight: the payload's table for its type (importance shares, drift PSI per feature,
       interaction pairs, fragile features, learned rules, one row per grid point of each behaviour
       curve, histogram bins);
@@ -132,6 +133,19 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
             return factors, columns
         inputs = [dict(i) for i in data.get("inputs") or [] if isinstance(i, Mapping)]
         return inputs, ["name", "label", "value", "exact", "unit", "type"]
+    if kind == "reason_table":
+        entries = data.get("entries") or {}
+        never = data.get("never_state") or {}
+        table = [
+            {"input": str(name), "treatment": "reason", "reason": (entry or {}).get("reason"), "code": (entry or {}).get("code")}
+            for name, entry in entries.items()
+        ]
+        table += [{"input": str(name), "treatment": "never state", "reason": why or None, "code": None} for name, why in never.items()]
+        table += [
+            {"input": str(name), "treatment": "undecided", "reason": None, "code": None}
+            for name in (data.get("coverage") or {}).get("unmapped") or []
+        ]
+        return table, ["input", "treatment", "reason", "code"]
     if kind == "insight":
         return _insight_rows(data)
     if kind == "model":

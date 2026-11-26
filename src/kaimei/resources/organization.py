@@ -37,8 +37,8 @@ class Organization(Resource):
     def update_member(self, user_id: str, *, role: str) -> APIObject:
         """Change a member's role: ``owner``, ``admin``, ``member``, ``reviewer`` or ``viewer``.
 
-        A reviewer reads everything and can have a logged decision explained (``client.decisions.explain``),
-        and changes nothing else: the role for counsel, compliance and audit."""
+        A reviewer reads everything, can have a logged decision explained (``client.decisions.explain``) and
+        keeps the reason tables, and changes nothing else: the role for counsel, compliance and audit."""
         return self._patch(f"/v1/organization/members/{user_id}", {"role": role})
 
     def remove_member(self, user_id: str):

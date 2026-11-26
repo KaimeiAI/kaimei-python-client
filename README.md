@@ -677,9 +677,43 @@ With nothing chosen, `explain` uses KernelSHAP where the model allows it, seed 0
 for a table, so the same decision always gives the same numbers. A record states what Kaimei stored and
 computed; it does not make a decision, a notice or a filing compliant, and it is not legal advice.
 
+### Reason tables
+
+A reason table holds the wording your organization has approved for why a model decided against someone, and the
+inputs that must never be given as a reason. With one in force, a declined decision's record draws its draft
+reasons: the approved wording for the strongest pushes toward the decline, and what is held for a person to review.
+
+```python
+draft = client.reason_tables.save_draft(
+    "credit-risk-v3",
+    adverse_outcome="decline",
+    entries={
+        "debt_to_income": "Excessive obligations in relation to income",
+        "num_delinquencies": "Delinquent past or present credit obligations with others",
+        "credit_score": "Credit score",
+        "employment_years": "Length of employment",
+    },
+    never_state={"age": "a prohibited basis"},
+    note="First wording, from compliance.",
+)
+print(draft.coverage.unmapped)      # inputs with neither wording nor a place on the never-state list
+
+# try the wording on a real decision before anyone approves it
+preview = client.decisions.retrieve("APP-2026-00417", reason_table="draft").reasons
+for reason in preview.reasons:
+    print(reason.reason)            # Excessive obligations in relation to income, ...
+for held in preview.held:
+    print(held.sentence)            # Housing status pushed toward decline and has no approved reason. Hold for review.
+```
+
+A draft changes nothing. A reviewer, admin or owner approves it, in the dashboard or signed in with
+`client.auth.login` (an API key is refused: the table records the person who approved it). An approved version is
+never edited; approving the next one retires it, and each decision keeps the version in force when it was made.
+The wording is yours: Kaimei stores it and applies it, and does not write it.
+
 People who review decisions and build nothing can be given the `reviewer` role
 (`client.organization.invite(email=..., role="reviewer")`): they read everything, can explain a logged decision
-and save its record, and change nothing else.
+and save its record, draft and approve reason tables, and change nothing else.
 
 ## Resources
 
@@ -689,6 +723,7 @@ and save its record, and change nothing else.
 | `client.predictions` | `/v1/predictions` |
 | `client.explanations` | `/v1/explanations` |
 | `client.decisions` | `/v1/decisions` (records, `explain`, `pdf`, `save_pdf`) |
+| `client.reason_tables` | `/v1/reason-tables` (`save_draft`, `approve`, `in_force`, versions) |
 | `client.analyses` | `/v1/analyses` |
 | `client.insights` | `/v1/insights` |
 | `client.auth` | `/v1/auth` |

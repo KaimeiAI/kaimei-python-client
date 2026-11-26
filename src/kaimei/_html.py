@@ -582,6 +582,7 @@ def render(data: Mapping[str, Any]) -> str:
     builder: Callable[[Mapping[str, Any]], str] = {
         "explanation": _explanation,
         "decision_record": _decision_record,
+        "reason_table": _reason_table,
         "insight": _insight,
         "model": _model,
         "prediction": _prediction,
@@ -749,6 +750,24 @@ def _decision_record(data: Mapping[str, Any]) -> str:
         body = f'<div>{_e(counterfactual["sentence"])}</div><span class="km-faint">{_e(counterfactual.get("note") or "")}</span>'
         out.append(_details("What would have changed the outcome", f'<div class="km-cf">{body}</div>', open_=True))
 
+    drafted = _map(data.get("reasons"))
+    if drafted:
+        cited = _map(drafted.get("table"))
+        which = "the draft reason table" if cited.get("status") == "draft" else f"reason table version {cited.get('version')}"
+        said = [f'<div>{_e(drafted.get("sentence") or "")}</div>']
+        for number, item in enumerate([r for r in (drafted.get("reasons") or []) if isinstance(r, Mapping)], start=1):
+            source = str(item.get("label") or item.get("feature") or "")
+            if item.get("display") is not None:
+                source += f" ({item.get('display')})"
+            said.append(f'<div>{number}. <b>{_e(item.get("reason"))}</b> <span class="km-faint">from {_e(source)}</span></div>')
+        for item in drafted.get("held") or []:
+            if isinstance(item, Mapping):
+                said.append(f'<div>{_badge("held for review", "warn")} {_e(item.get("sentence"))}</div>')
+        for note in drafted.get("notes") or []:
+            said.append(f'<div class="km-faint">{_e(note)}</div>')
+        said.append(f'<span class="km-faint">In the wording of {_e(which)}. {_e(drafted.get("notice") or "")}</span>')
+        out.append(_details("Draft reasons", f'<div class="km-cf">{"".join(said)}</div>', open_=bool(drafted.get("applies"))))
+
     inputs = [i for i in (data.get("inputs") or []) if isinstance(i, Mapping)]
     if inputs:
         table = _table(
@@ -788,6 +807,46 @@ def _decision_record(data: Mapping[str, Any]) -> str:
     left = f'Fingerprint <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
     where = "/decisions/" + "/".join(quote(part, safe="") for part in str(data.get("id") or "").split("/"))
     out.append(_foot(left, _link(where, "Open in dashboard") if data.get("id") else ""))
+    return "".join(out)
+
+
+def _reason_table(data: Mapping[str, Any]) -> str:
+    """A reason table: which version it is, what it gives reasons for, and its wording input by input."""
+    model = _map(data.get("model"))
+    adverse = _map(data.get("adverse"))
+    coverage = _map(data.get("coverage"))
+    status = str(data.get("status") or "")
+    out = [_head("Reason table", data.get("id"), _when(data, key="approved_at") or _when(data, key="updated_at"))]
+    title = "Draft" if status == "draft" else f"Version {data.get('version')}"
+    out.append(f'<div class="km-result"><span class="km-title">{_e(title)}</span><span class="km-sub">{_e(model.get("name") or "")}</span></div>')
+    badges = [_badge("in force", "ok") if status == "approved" else _badge(status or "draft", "warn" if status == "draft" else "")]
+    against = adverse.get("outcome") or (f"a {adverse.get('direction')} prediction" if adverse.get("direction") else "")
+    if against:
+        badges.append(_badge(f"reasons for {against}", "info"))
+    badges.append(_badge(f"at most {data.get('max_reasons')} reasons", mono=True))
+    undecided = [str(name) for name in coverage.get("unmapped") or []]
+    badges.append(_badge("every input decided", "ok") if not undecided else _badge(f"{len(undecided)} inputs undecided", "warn"))
+    out.append(_badges(badges))
+    who = _map(data.get("approved_by")).get("name")
+    if status != "draft" and who:
+        out.append(f'<div class="km-lead">Approved by {_e(who)}.</div>')
+    elif status == "draft":
+        out.append('<div class="km-lead">A draft changes nothing until a reviewer, admin or owner approves it.</div>')
+    rows = [
+        [_e(name), _badge("reason", "ok"), _e(_map(entry).get("reason") or ""), _e(_map(entry).get("code") or "")]
+        for name, entry in _map(data.get("entries")).items()
+    ]
+    rows += [[_e(name), _badge("never state", "warn"), _e(why or ""), ""] for name, why in _map(data.get("never_state")).items()]
+    rows += [[_e(name), _badge("undecided"), '<span class="km-faint">held for review when it pushes toward the adverse outcome</span>', ""] for name in undecided]
+    if rows:
+        out.append(_table([("Input", "mono"), ("Treatment", ""), ("Approved wording, or why never stated", "wrap"), ("Code", "mono muted")], rows))
+    if data.get("note"):
+        out.append(f'<div class="km-faint" style="margin-top:8px">What changed: {_e(data.get("note"))}</div>')
+    out.append(_raw_json("JSON", data))
+    mark = str(data.get("content_hash") or "")
+    left = f'Content <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/decisions?view=reasons", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot(left, link))
     return "".join(out)
 
 

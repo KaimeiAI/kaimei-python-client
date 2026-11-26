@@ -18,8 +18,14 @@ raise `NotFoundError`; everything else works as it did.
   row per input's effect. A page of decisions shows as a table. A text model's record shows the text token by token,
   each token on the colour of its effect; a picture's record says where the model looked, and its PDF
   (`decisions.save_pdf`) holds the picture with the evidence drawn over it.
+- **`client.reason_tables`**: the approved wording for why a model decided against someone. `save_draft(model,
+  adverse_outcome=, entries=, never_state=)` creates or replaces a model's draft, `approve(table_id)` puts it in
+  force (a signed-in reviewer, admin or owner), `in_force(model)` and `draft(model)` read them, `list` gives every
+  version, and `discard` deletes a draft. A decision record's `reasons` holds the draft reasons drawn with the
+  version in force when the decision was made; `decisions.retrieve(id, reason_table="draft")` previews a draft's
+  wording on a real decision. Both show as cards in a notebook.
 - **The `reviewer` role** can be given in `organization.invite` and `organization.update_member`: it reads
-  everything and can call `decisions.explain`, and nothing else that writes.
+  everything, can call `decisions.explain`, and drafts and approves reason tables; nothing else that writes.
 
 ## 0.12.0 — 2026-11-25
 
