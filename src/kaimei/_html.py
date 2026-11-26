@@ -583,6 +583,8 @@ def render(data: Mapping[str, Any]) -> str:
         "explanation": _explanation,
         "decision_record": _decision_record,
         "reason_table": _reason_table,
+        "evidence": _evidence,
+        "model_report": _model_report,
         "insight": _insight,
         "model": _model,
         "prediction": _prediction,
@@ -810,6 +812,115 @@ def _decision_record(data: Mapping[str, Any]) -> str:
     return "".join(out)
 
 
+_EVIDENCE_WORDS = {
+    "held": ("held", "ok"),
+    "partial": ("partly held", "warn"),
+    "stale": ("out of date", "warn"),
+    "missing": ("not held yet", ""),
+    "not_applicable": ("does not apply", ""),
+}
+
+
+def _evidence_summary(frameworks: Iterable[Any]) -> str:
+    """A table of rules: how many requirements of each have evidence held, and the sentence that says it."""
+    rows = []
+    for framework in frameworks:
+        framework = _map(framework)
+        summary = _map(framework.get("summary"))
+        sentence = framework.get("sentence") or summary.get("sentence") or ""
+        rows.append(
+            [
+                f'<b>{_e(framework.get("name"))}</b><br><span class="km-faint">{_e(framework.get("citation") or "")}</span>',
+                _e(sentence),
+            ]
+        )
+    return _table([("Rule", "wrap"), ("Evidence Kaimei holds", "wrap")], rows) if rows else ""
+
+
+def _evidence(data: Mapping[str, Any]) -> str:
+    """A model's evidence by requirement: each rule in a sentence, the requirements under it, and what to add."""
+    model = _map(data.get("model"))
+    frameworks = [f for f in (data.get("frameworks") or []) if isinstance(f, Mapping)]
+    held = sum(int(_map(f.get("summary")).get("held") or 0) for f in frameworks)
+    total = sum(int(_map(f.get("summary")).get("requirements") or 0) for f in frameworks)
+    out = [_head("Evidence", model.get("slug"), _when(data, key="checked_at"))]
+    out.append(
+        f'<div class="km-result"><span class="km-value">{held} of {total}</span>'
+        f'<span class="km-sub">requirements with evidence held · {_e(model.get("name") or "")}</span></div>'
+    )
+    out.append(_evidence_summary(frameworks))
+    for framework in frameworks:
+        rows = []
+        for requirement in framework.get("requirements") or []:
+            requirement = _map(requirement)
+            words, tone = _EVIDENCE_WORDS.get(str(requirement.get("status")), (str(requirement.get("status")), ""))
+            parts = [_map(part) for part in requirement.get("evidence") or []]
+            listed = "; ".join(
+                f"{_e(part.get('label'))} ({_e(_EVIDENCE_WORDS.get(str(part.get('status')), ('', ''))[0])})" for part in parts
+            )
+            rows.append(
+                [
+                    f'<b>{_e(requirement.get("title"))}</b><br><span class="km-faint">{_e(requirement.get("reference"))}</span>',
+                    _badge(words, tone),
+                    listed,
+                ]
+            )
+        if rows:
+            body = _table([("Requirement", "wrap"), ("Evidence", ""), ("What is checked", "wrap")], rows)
+            out.append(_details(_e(framework.get("name")), body, note=f"{len(rows)} requirements"))
+    todo = [_map(entry) for entry in data.get("todo") or []]
+    if todo:
+        lines = "".join(f'<div><b>{_e(entry.get("label"))}.</b> {_e(entry.get("todo"))}</div>' for entry in todo)
+        out.append(_details("What would add evidence", f'<div class="km-cf">{lines}</div>', open_=True, note=str(len(todo))))
+    out.append(_raw_json("JSON", data))
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/compliance", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot(f'<span class="km-faint">{_e(data.get("notice") or "")}</span>', link))
+    return "".join(out)
+
+
+def _model_report(data: Mapping[str, Any]) -> str:
+    """A model documentation report: what the model is, what its analyses found, and the evidence held."""
+    model = _map(data.get("model"))
+    out = [_head("Model documentation", model.get("slug"), _when(data, key="generated_at"))]
+    out.append(
+        f'<div class="km-result"><span class="km-title">{_e(model.get("name") or "")}</span>'
+        f'<span class="km-sub">version {_e(model.get("version"))} · {_e(model.get("task_words") or model.get("task") or "")}</span></div>'
+    )
+    if model.get("description"):
+        out.append(f'<div class="km-lead" style="color:var(--text)">{_e(model["description"])}</div>')
+    said = " ".join(str(part) for part in (_map(data.get("output")).get("sentence"), _map(data.get("runs")).get("sentence")) if part)
+    if said:
+        out.append(f'<div class="km-lead">{_e(said)}</div>')
+    findings = [_map(f) for f in data.get("findings") or []]
+    if findings:
+        out.append('<div class="km-h">What the analyses found</div>')
+        lines = "".join(
+            f'<div><b>{_e(f.get("name"))}.</b> {_e(f.get("summary") or f.get("title") or "")} '
+            f'<span class="km-faint">{_e(short_date(f.get("created_at")))}</span></div>'
+            for f in findings
+        )
+        out.append(f'<div class="km-cf">{lines}</div>')
+    not_run = [str(name) for name in data.get("not_run") or []]
+    if not_run:
+        out.append(f'<div class="km-faint" style="margin-top:6px">Not run: {_e(", ".join(not_run))}.</div>')
+    holdings = [_map(h) for h in data.get("holdings") or []]
+    if holdings:
+        rows = [[f'<b>{_e(h.get("label"))}</b>', _e(h.get("detail") or "")] for h in holdings]
+        out.append(_details("What Kaimei holds about it", _table([("What", ""), ("Held", "wrap")], rows), note=str(len(rows))))
+    frameworks = [f for f in (data.get("evidence") or []) if isinstance(f, Mapping)]
+    if frameworks:
+        out.append(_details("Evidence held, by rule", _evidence_summary(frameworks), open_=True))
+    limits = "".join(f"<div>{_e(line)}</div>" for line in data.get("limits") or [])
+    if limits:
+        out.append(_details("What this report does not show", f'<div class="km-cf">{limits}</div>'))
+    out.append(_raw_json("JSON", data, note="to_json() has everything"))
+    mark = str(_map(data.get("fingerprint")).get("value") or "")
+    left = f'Fingerprint <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/compliance", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot(left, link))
+    return "".join(out)
+
+
 def _reason_table(data: Mapping[str, Any]) -> str:
     """A reason table: which version it is, what it gives reasons for, and its wording input by input."""
     model = _map(data.get("model"))
@@ -845,7 +956,7 @@ def _reason_table(data: Mapping[str, Any]) -> str:
     out.append(_raw_json("JSON", data))
     mark = str(data.get("content_hash") or "")
     left = f'Content <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
-    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/decisions?view=reasons", "Open in dashboard") if model.get("slug") else ""
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/compliance?view=reasons", "Open in dashboard") if model.get("slug") else ""
     out.append(_foot(left, link))
     return "".join(out)
 

@@ -5,6 +5,7 @@ import numbers
 import os
 import re
 import warnings
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -233,6 +234,52 @@ class Models(Resource):
         regression); ``series`` the headline numbers per window; ``coverage`` the share of predictions with an outcome.
         """
         return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
+
+    def evidence(self, model: str, *, fresh_days: Optional[int] = None) -> APIObject:
+        """What Kaimei holds for a model against the requirements its guides cover, requirement by requirement.
+
+        ``frameworks`` are the rules (the EU AI Act, adverse action reasons, model risk management, the GDPR's
+        automated decisions); each requirement states what it asks, the ``evidence`` held toward it with its
+        ``status`` (``held``, ``stale``, ``missing`` or ``not_applicable``), and what stays with you. ``todo``
+        lists what would add the evidence that is missing. An analysis of live traffic older than ``fresh_days``
+        (90 unless you say otherwise) is ``stale``.
+
+        It is a check of what is stored. It does not say that a model, or its use, complies with anything.
+        """
+        return self._get(f"/v1/models/{model}/evidence", {"fresh_days": fresh_days})
+
+    def report(self, model: str, *, fresh_days: Optional[int] = None) -> APIObject:
+        """The model documentation report, as data: what the model is, what it reads and answers, the latest
+        finding of each analysis in the analysis's own words, the data and records held, the reason table in
+        force, its versions, and the evidence held by requirement. Nothing is computed for it."""
+        return self._get(f"/v1/models/{model}/report", {"fresh_days": fresh_days})
+
+    def report_pdf(self, model: str, *, paper: str = "letter", fresh_days: Optional[int] = None) -> bytes:
+        """The model documentation report as a PDF, as bytes. ``paper`` is ``"letter"`` or ``"a4"``."""
+        if paper not in ("letter", "a4"):
+            raise ValueError("paper is 'letter' or 'a4'.")
+        params = {"format": "pdf", "paper": paper, "fresh_days": fresh_days}
+        return bytes(self._client._request("GET", f"/v1/models/{model}/report", params=params, raw=True))
+
+    def save_report_pdf(
+        self,
+        model: str,
+        path: Union[str, Path, None] = None,
+        *,
+        paper: str = "letter",
+        fresh_days: Optional[int] = None,
+    ) -> Path:
+        """Save the model documentation report as a PDF and return where it was written.
+
+        ``path`` is a file, or a folder to put ``model-documentation-<model>.pdf`` in. Left out, the file goes in
+        the current folder under that name.
+        """
+        name = "model-documentation-" + (re.sub(r"[^A-Za-z0-9._-]+", "-", str(model)).strip("-.") or "model") + ".pdf"
+        target = Path(path) if path is not None else Path(name)
+        if target.is_dir():
+            target = target / name
+        target.write_bytes(self.report_pdf(model, paper=paper, fresh_days=fresh_days))
+        return target
 
     def upload_reference_data(
         self,

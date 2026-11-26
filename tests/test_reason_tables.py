@@ -208,7 +208,7 @@ def test_a_reason_table_shows_as_a_card_and_a_table() -> None:
     assert "Reason table" in card and "Version 1" in card and "reasons for decline" in card
     assert "Excessive obligations in relation to income" in card and "never state" in card
     assert "4 inputs undecided" in card and "home_ownership" in card
-    assert "/models/credit-risk-v3/decisions?view=reasons" in card
+    assert "/models/credit-risk-v3/compliance?view=reasons" in card
     assert "A draft changes nothing" in display.html(DRAFT)
     rows, columns = display.rows(TABLE)
     assert columns == ["input", "treatment", "reason", "code"]

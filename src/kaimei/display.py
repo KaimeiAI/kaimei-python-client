@@ -113,6 +113,8 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     - a decision record: one row per input's effect, strongest first, with the sentence that states it
       (a record that is not explained yet lists its inputs as recorded);
     - a reason table: one row per input, with how it is treated and its approved wording;
+    - a model's evidence: one row per requirement, with what is held and what is missing for it;
+    - a model documentation report: one row per finding of its analyses;
     - an insight: the payload's table for its type (importance shares, drift PSI per feature,
       interaction pairs, fragile features, learned rules, one row per grid point of each behaviour
       curve, histogram bins);
@@ -133,6 +135,26 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
             return factors, columns
         inputs = [dict(i) for i in data.get("inputs") or [] if isinstance(i, Mapping)]
         return inputs, ["name", "label", "value", "exact", "unit", "type"]
+    if kind == "evidence":
+        table = []
+        for framework in data.get("frameworks") or []:
+            for requirement in (framework or {}).get("requirements") or []:
+                parts = [part for part in requirement.get("evidence") or [] if isinstance(part, Mapping)]
+                table.append(
+                    {
+                        "rule": framework.get("name"),
+                        "requirement": requirement.get("title"),
+                        "reference": requirement.get("reference"),
+                        "status": requirement.get("status"),
+                        "held": [part.get("label") for part in parts if part.get("status") == "held"],
+                        "missing": [part.get("label") for part in parts if part.get("status") in ("missing", "stale")],
+                        "stays_with_you": requirement.get("yours"),
+                    }
+                )
+        return table, ["rule", "requirement", "reference", "status", "held", "missing", "stays_with_you"]
+    if kind == "model_report":
+        findings = [dict(f) for f in data.get("findings") or [] if isinstance(f, Mapping)]
+        return findings, ["name", "summary", "severity", "created_at", "status"]
     if kind == "reason_table":
         entries = data.get("entries") or {}
         never = data.get("never_state") or {}

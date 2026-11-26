@@ -677,6 +677,26 @@ With nothing chosen, `explain` uses KernelSHAP where the model allows it, seed 0
 for a table, so the same decision always gives the same numbers. A record states what Kaimei stored and
 computed; it does not make a decision, a notice or a filing compliant, and it is not legal advice.
 
+### Evidence by requirement, and the documentation report
+
+```python
+evidence = client.models.evidence("credit-risk-v3")
+for rule in evidence.frameworks:
+    print(rule.name, "-", rule.summary.sentence)   # EU AI Act - Evidence held toward 6 of 9 requirements, ...
+for entry in evidence.todo:
+    print(entry.label, "-", entry.todo)            # what would add the evidence that is missing
+evidence.to_frame()                                # one row per requirement
+
+client.models.save_report_pdf("credit-risk-v3", "files/")   # files/model-documentation-credit-risk-v3.pdf
+report = client.models.report("credit-risk-v3")              # the same report, as data
+```
+
+`evidence` lays what Kaimei stores for a model against the requirements its guides cover (the EU AI Act, adverse
+action reasons under Regulation B, model risk management, the GDPR's automated decisions): what each asks, the
+evidence held toward it, what is missing, and what stays with you. The report puts the model's registration, the
+latest finding of each analysis, the records held and that evidence in one document. Both report what is stored;
+neither says that a model, or its use, complies with anything.
+
 ### Reason tables
 
 A reason table holds the wording your organization has approved for why a model decided against someone, and the
