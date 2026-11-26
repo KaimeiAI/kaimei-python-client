@@ -248,9 +248,11 @@ class Models(Resource):
 
         ``series`` has one entry per ``hour`` / ``day`` / ``week``: the predictions logged in it, their mean output,
         and each input's PSI for the ``trailing`` rows that were the latest when it ended, with the same thresholds
-        as the drift analysis (``status`` is ``stable``, ``moderate`` or ``significant``). ``chance`` is the PSI that
-        many rows drawn from the reference data itself can reach: at or under it, drift cannot be told from sampling,
-        and ``beyond_chance`` is ``False``. A window of few rows scores high by sampling alone, so read both.
+        as the drift analysis (``status`` is ``stable``, ``moderate`` or ``significant``). ``levels`` is the PSI that
+        many rows drawn from the reference data itself can give each input: at or under its own level, an input's
+        drift cannot be told from sampling. ``top_feature`` is the input the window's reading comes from, ``chance``
+        its level, and ``beyond_chance`` whether any input drifted. A window of few rows scores high by sampling
+        alone, so read ``status`` together with it.
         ``features`` ranks the inputs by their highest PSI. ``tape`` draws one input in full (``feature``, or the most
         drifted): up to ``points`` logged predictions as ``[id, time, input value, output]``, the reference data's
         histogram and each window's. ``insights`` are the stored drift and performance insights in the range.
@@ -280,6 +282,51 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/population", {"days": days, "limit": limit})
 
+    def report(self, model: str):
+        """A model written up as a case study, from what Kaimei already holds about it.
+
+        ``headline`` says what the model is, ``facts`` are the key numbers, and ``sections`` are always the same
+        ten in order: ``overview``, ``drivers``, ``behaviour``, ``interactions``, ``example`` (one stored
+        explanation, the one whose answer is nearest the median logged answer), ``outputs``, ``robustness``,
+        ``population``, ``drift`` and ``performance``. Each has a ``summary`` of one to three sentences built
+        from the numbers, a ``status`` (``ready``, ``stale`` when its insight is older than 30 days, or
+        ``missing``), ``applies`` (false when this kind of model cannot have the section), a ``table`` of its key
+        numbers and the ``data`` a chart needs. ``gaps`` lists what is not on file and what would add it.
+        ``kaimei.display.rows(report)`` and ``report.to_frame()`` give one row per section.
+
+        Nothing is run and nothing is stored: the model is not called and no analysis is started, so this
+        works for any model and counts against no limit. ``report_markdown`` gives the same report as text.
+        """
+        return self._get(f"/v1/models/{model}/report")
+
+    def report_markdown(self, model: str) -> str:
+        """The model's report (see ``report``) as a Markdown document, ready for a wiki or a model card.
+
+        A title, the facts as a table, a heading per section with its sentences and a table of its key numbers,
+        and the list of what is not on file. It holds no HTML.
+        """
+        raw = self._client._request("GET", f"/v1/models/{model}/report", params={"format": "markdown"}, raw=True)
+        return bytes(raw).decode("utf-8")
+
+    def compare(self, model: str, other: str, *, source: str = "reference", limit: int = 500):
+        """Run two models on the same rows: how far they agree, how each scores, and where they part.
+
+        The rows are ``model``'s: its reference rows (``source="reference"``) or the inputs of its newest logged
+        predictions (``source="predictions"``), ``limit`` of them at most. Everything given per model is a pair,
+        ``model`` first: ``models``, ``scores`` (accuracy and AUC, or MAE and R², on the rows whose truth is
+        known), and in ``rows`` the ``values`` and ``decisions``. ``agreement`` has ``rate`` (the share of rows
+        decided the same way; classifiers only), ``correlation``, ``mean_gap`` and ``max_gap``; ``differ_most``
+        lists the rows furthest apart; ``importance`` pairs the two models' global importance when both have it
+        stored. ``kaimei.display.rows(comparison)`` and ``comparison.to_frame()`` give one row per row compared,
+        with each model's value and decision, the ``gap`` and an ``input:<name>`` column per input.
+
+        The two must take the same inputs and both predict a number or one of the same classes; otherwise the
+        API answers ``422`` and says what differs. Both models are run and nothing is stored. It counts as
+        starting an analysis does: the same hourly allowance, and refused once the month's analyses are used up.
+        To see why the two answer a row as they do, explain that row with each (``client.explanations.create``).
+        """
+        return self._get(f"/v1/models/{model}/comparison", {"with": other, "source": source, "limit": limit})
+
     def upload_reference_data(
         self,
         model: str,
@@ -294,6 +341,13 @@ class Models(Resource):
         )
 
     def reference_data(self, model: str, *, sample: int = 5):
+        """A summary of a model's reference data: how many ``rows`` it has, whether they have labels, and
+        the first ``sample`` of them (up to 100) under ``sample``.
+
+        ``sample_labels`` holds the label stored with each of those rows, in the same order, and ``None`` for a
+        row stored without one, so ``zip(summary.sample, summary.sample_labels)`` pairs each row with what
+        happened. An API before the release after 1.3.1 sends no ``sample_labels``.
+        """
         return self._get(f"/v1/models/{model}/reference-data", {"sample": sample})
 
     def delete_reference_data(self, model: str):

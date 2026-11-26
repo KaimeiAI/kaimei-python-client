@@ -7,15 +7,32 @@ after 1.3.1); an older API answers 404.
 
 ### Added
 
+- `client.models.reference_data(model, sample=...)` gives each sampled row's stored label beside it, as
+  `sample_labels` (the API after 1.3.1 sends it): one entry per row of `sample`, `None` where a row was stored
+  without a label. Nothing changed in the call; the method now says what it returns.
 - `client.models.monitoring(model, window="day", days=30, feature=None, trailing=500, points=1500)`: a model's
   logged traffic over time, with the drift a check would have found at the end of every hour, day or week, the
-  PSI chance alone gives a window of that size, and one input drawn in full against the reference data.
+  PSI chance alone gives each input in a window of that size (`levels`), and one input drawn in full against the
+  reference data.
   `kaimei.display.rows(history)` and `history.to_frame()` give one row per window, with each input's PSI as a
   `drift.<input>` column.
 - `client.models.population(model, days=30, limit=2000)`: a model's logged predictions one by one, with the
   fields they can be grouped by (inputs, metadata keys, what was predicted, what happened) ranked by how far each
   separates the model's answers. `kaimei.display.rows(population)` and `population.to_frame()` give one row per
   prediction with a column per field, ready for `groupby`.
+- `client.models.report(model)`: a model written up as a case study from what Kaimei already holds about it
+  (`GET /v1/models/{model}/report`, in the same API release): a `headline`, the key `facts`, ten `sections`
+  each with a `summary` built from the numbers, a `status` (`ready`, `stale` or `missing`) and the data a chart
+  needs, and `gaps`, what is not on file and what would add it. Nothing is run and nothing counts against a
+  limit. `client.models.report_markdown(model)` returns the same report as a Markdown document with no HTML.
+  In a notebook a report shows as a card, and `kaimei.display.rows(report)` and `report.to_frame()` give one
+  row per section.
+- `client.models.compare(model, other, source="reference", limit=500)`: two models that take the same inputs, run
+  on the same rows (`GET /v1/models/{model}/comparison`, in the same API release): how often they decide alike,
+  the correlation and gap between their answers, each one's accuracy and AUC (or MAE and R²) where the truth is
+  known, the rows they differ on most and, when both have it stored, their global importance side by side.
+  `kaimei.display.rows(comparison)` and `comparison.to_frame()` give one row per row compared, with each model's
+  value and decision, the `gap` and an `input:<name>` column per input. It counts as starting an analysis does.
 
 ### Changed
 

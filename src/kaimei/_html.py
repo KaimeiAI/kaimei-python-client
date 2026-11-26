@@ -584,12 +584,45 @@ def render(data: Mapping[str, Any]) -> str:
         "model": _model,
         "prediction": _prediction,
         "analysis": _analysis,
+        "model_report": _report,
         "list": _page,
     }.get(kind, _generic)
     card = f'<div class="{"km wide" if kind == "list" else "km"}">{builder(data)}</div>'
     # The stylesheet drives themes and hover; the inline copy keeps the layout where a viewer
     # drops <style> blocks (GitHub's notebook viewer does).
     return f"<style>{CSS}</style>{inline_styles(card, CSS)}"
+
+
+def _report(data: Mapping[str, Any]) -> str:
+    """A model's report, compact: what it is, the facts, what each section says, and what is not on file."""
+    model = _map(data.get("model"))
+
+    def plain(text: Any) -> str:
+        # The API sets the names of inputs and classes in backticks; a card shows them as plain words.
+        return _e(str(text or "").replace("`", ""))
+
+    out = [_head("Model report", model.get("slug"), _when(data, "generated ", key="generated_at"))]
+    out.append(f'<div class="km-result"><span class="km-title">{_e(model.get("name") or "Model")}</span></div>')
+    if data.get("headline"):
+        out.append(f'<div class="km-lead">{plain(data["headline"])}</div>')
+    facts = _dicts(data.get("facts"))
+    out.append(_tiles((str(f.get("label") or ""), _e(f.get("value") or ""), str(f.get("note") or "")) for f in facts))
+    tones = {"ready": "ok", "stale": "warn"}
+    sections = []
+    for number, section in enumerate(_dicts(data.get("sections")), start=1):
+        status = str(section.get("status") or "")
+        label = "does not apply" if status == "missing" and section.get("applies") is False else status
+        said = f'<b>{_e(section.get("title") or section.get("key"))}</b><br><span class="km-muted">{plain(section.get("summary"))}</span>'
+        sections.append([str(number), said, _badge(label, tones.get(status, ""))])
+    if sections:
+        out.append(_table([("", "num mono muted"), ("Section", "wrap"), ("Status", "")], sections))
+    gaps = _dicts(data.get("gaps"))
+    if gaps:
+        listed = "".join(f"<li><b>{_e(gap.get('title'))}.</b> {plain(gap.get('how'))}</li>" for gap in gaps)
+        out.append(_details(f"What is not on file ({len(gaps)})", f"<ul>{listed}</ul>", open_=True))
+    link = _link(f"/models/{model['slug']}/report", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot("written from what is stored; nothing was run", link))
+    return "".join(out)
 
 
 def _explanation(data: Mapping[str, Any]) -> str:

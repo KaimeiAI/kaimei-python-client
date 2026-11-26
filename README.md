@@ -640,6 +640,17 @@ population = client.models.population("credit-risk-v3", days=30)
 [(field.name, field.separation) for field in population.fields[:3]]
 population.to_frame().groupby("input:home_ownership")["value"].mean()
 
+# The model as one readable case study, written from what is already stored (nothing is run)
+report = client.models.report("credit-risk-v3")
+[(section.title, section.status, section.summary) for section in report.sections]
+[gap.title for gap in report.gaps]  # what is not on file, and gap.how says what would add it
+open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.report_markdown("credit-risk-v3"))
+
+# Two models on the same rows (two versions, or a champion and a challenger): do they agree, and where not?
+both = client.models.compare("loan-forest-v1", "loan-scorecard-v1")
+both.agreement.rate, [(m.name, s.auc) for m, s in zip(both.models, both.scores)]
+both.to_frame().sort_values("gap", ascending=False).head()  # the rows they answer most differently
+
 # Study the model as a whole, then read the insights
 analysis = client.analyses.create(model="credit-risk-v3", type="full")
 client.analyses.wait(analysis.id)
