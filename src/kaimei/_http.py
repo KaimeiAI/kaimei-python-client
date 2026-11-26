@@ -118,7 +118,31 @@ def encode_json(body: Any) -> bytes:
     try:
         return _dumps(_null_for_nan(json.loads(json.dumps(body, default=_json_default))))
     except ValueError as exc:
-        raise ValueError("Infinity can't be sent to Kaimei, because JSON can't hold it. Replace it with a number.") from exc
+        raise ValueError(_why_not_sent(exc)) from exc
+
+
+def _why_not_sent(exc: ValueError) -> str:
+    """Why a body cannot be written as JSON, said as what is wrong with it: a number that is not finite, text
+    that is not text, or a list or a dict that holds itself."""
+    if isinstance(exc, UnicodeEncodeError):
+        # The JSON text, and where in it the character is: what comes just before usually names the value.
+        text = str(exc.object)
+        code = f"U+{ord(text[exc.start]):04X}" if 0 <= exc.start < len(text) else "a surrogate"
+        before = text[max(0, exc.start - 40) : exc.start]
+        return (
+            f"This can't be sent to Kaimei: its text holds a character that cannot be written as UTF-8 ({code}, half of "
+            f"a pair whose other half is missing{f', right after {before!r}' if before else ''}). Take it out or "
+            "replace it."
+        )
+    said = str(exc)
+    if said.startswith("Out of range float values"):
+        return "Infinity can't be sent to Kaimei, because JSON can't hold it. Replace it with a number."
+    if said.startswith("Circular reference"):
+        return (
+            "This can't be sent to Kaimei: it holds itself (a list or a dict that is inside itself), and JSON can't "
+            "write that."
+        )
+    return f"This can't be sent to Kaimei, because it can't be written as JSON: {said}"
 
 
 def _null_for_nan(value: Any) -> Any:

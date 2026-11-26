@@ -13,9 +13,13 @@ Keep the conversion rules aligned with that file when you change either side.
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import datetime as _dt
+import inspect
 import json
 import math
+import numbers
 import platform
 import warnings
 import zlib
@@ -29,6 +33,8 @@ from .ensembles import (
     NO_LIMIT,
     READER,
     Unreadable,
+    _classes_of,
+    _frame_for,
     changes_how_it_predicts,
     ensemble_spec,
     far_rows,
@@ -38,6 +44,7 @@ from .ensembles import (
     image_check,
     moved_thresholds,
     network_differs,
+    predicts_by_its_margin,
     rows_to_check,
     several_outputs,
     through_scalers,
@@ -59,7 +66,28 @@ COMPACT_EXTERNALIZE_ABOVE = 4_096
 TENSOR_KEYS = ("weight", "bias", "gamma", "beta", "center", "scale", "mean", "var", "std", "offset")
 #: weights="summary" sends a tensor's statistics only from this size up.
 MIN_VALUES_FOR_STATS = 256
-EXECUTABLE_FAMILIES = {"network", "tree", "ensemble", "composite"}
+EXECUTABLE_FAMILIES = {"network", "tree", "ensemble", "composite", "graph"}
+#: The number types a binary tensor can be stored in, as the API names them, and their bytes on the wire.
+TENSOR_DTYPES = {
+    "f16": "<f2",
+    "f32": "<f4",
+    "f64": "<f8",
+    "i8": "<i1",
+    "i16": "<i2",
+    "i32": "<i4",
+    "i64": "<i8",
+    "u8": "<u1",
+    "bool": "?",
+}
+#: How a model is read: by Kaimei's own readers, through ONNX, or whichever of the two reproduces it.
+ROUTES = ("auto", "native", "onnx")
+#: Values of a tensor looked at together while it is summarised. A larger tensor is read a piece at a time.
+SUMMARY_PIECE_VALUES = 1 << 22
+#: What ``weights=`` may be: every value (``full``), shapes and statistics (``summary``), or a summary with a
+#: small picture of each learned tensor (``pictures``).
+WEIGHTS_MODES = ("full", "summary", "pictures")
+#: Cells a side of the picture ``weights="pictures"`` sends of a tensor, at most.
+VIEW_SIDE = 64
 
 try:
     import numpy as np
@@ -130,8 +158,119 @@ def warn_if_large_spec(spec: Mapping[str, Any]) -> int:
     return size
 
 
+def _pieces(array: Any, size: int = SUMMARY_PIECE_VALUES) -> Any:
+    """A tensor's values in order, ``size`` at a time, as views: the tensor is never copied whole."""
+    if array.ndim <= 1 or array.flags.c_contiguous:
+        flat = array.reshape(-1)
+        for start in range(0, int(flat.size), size):
+            yield flat[start : start + size]
+    else:
+        for slab in array:
+            yield from _pieces(slab, size)
+
+
+def _stats_in_pieces(array: Any) -> Dict[str, Any]:
+    """The statistics of :func:`tensor_stats` for a tensor too large to copy: two passes over its pieces."""
+    count = int(array.size)
+    low, high = math.inf, -math.inf
+    total = squares = magnitude = 0.0
+    quiet = 0
+    for piece in _pieces(array):
+        low, high = min(low, float(piece.min())), max(high, float(piece.max()))
+        total += float(piece.sum(dtype=np.float64))
+        squares += float(np.square(piece, dtype=np.float64).sum())
+        size = np.abs(piece)
+        magnitude += float(size.sum(dtype=np.float64))
+        quiet += int(np.count_nonzero(size < 1e-8))
+    counts = np.zeros(12, dtype=np.int64)
+    edges = np.linspace(low, high, 13)
+    for piece in _pieces(array):
+        found, edges = np.histogram(piece, bins=12, range=(low, high))
+        counts += found
+    mean = total / count
+    return {
+        "min": low,
+        "max": high,
+        "mean": mean,
+        "std": math.sqrt(max(squares / count - mean * mean, 0.0)),
+        "l2": math.sqrt(squares),
+        "abs_mean": magnitude / count,
+        "sparsity": quiet / count,
+        "numel": count,
+        "histogram": {"counts": [int(item) for item in counts], "edges": [float(edge) for edge in edges]},
+    }
+
+
+def tensor_view(array: Any) -> Optional[Dict[str, Any]]:
+    """A small picture of a tensor, made here, for the API to show of a tensor it is not sent the values of.
+
+    The tensor is read as a matrix: its first axis down, the rest across (a vector is one row). Leading axes
+    of one are not counted, as the API does not count them: a recurrent layer's ``(1, 4 × units, inputs)``
+    weights are ``4 × units`` rows. It is cut into
+    whole blocks so that at most :data:`VIEW_SIDE` cells go each way, and each cell is the value of largest
+    magnitude in its block, with its sign. Cells travel as a byte each between the smallest and largest of
+    them: ``value = range[0] + byte / 255 * (range[1] - range[0])``. The tensor is read a block at a time and
+    never copied whole. ``None`` for a tensor with no values.
+
+    A tensor of up to ``VIEW_SIDE`` by ``VIEW_SIDE`` values has a cell for every value, so its picture is the
+    tensor itself to one part in 255 of its range. :func:`finalize_spec` therefore sends a picture only where
+    it sends statistics: for tensors of :data:`MIN_VALUES_FOR_STATS` values or more.
+    """
+    array = np.asarray(array)
+    while array.ndim > 1 and array.shape[0] == 1:
+        array = array[0]
+    dims = [int(dim) for dim in array.shape]
+    height = 1 if len(dims) < 2 else dims[0]
+    width = int(array.size) if len(dims) < 2 else int(array.size // max(dims[0], 1))
+    if height < 1 or width < 1 or array.dtype.kind not in "fiub":
+        return None
+    step_r, step_c = -(-height // VIEW_SIDE), -(-width // VIEW_SIDE)
+    rows, cols = -(-height // step_r), -(-width // step_c)
+    matrix = array.reshape(height, width) if array.flags.c_contiguous else None
+    cells = np.zeros((rows, cols), dtype=np.float64)
+    for row in range(rows):
+        first, last = row * step_r, min((row + 1) * step_r, height)
+        if matrix is not None:
+            slab = matrix[first:last]
+        else:
+            slab = np.ascontiguousarray(array[first:last] if len(dims) >= 2 else array).reshape(last - first, width)
+        deep = last - first
+        blocks_at_once = max(1, SUMMARY_PIECE_VALUES // max(deep * step_c, 1))
+        for block in range(0, cols, blocks_at_once):
+            left, right = block * step_c, min((block + blocks_at_once) * step_c, width)
+            piece = slab[:, left:right]
+            whole = (right - left) // step_c
+            if whole:
+                # Each block's values in reading order, so a tie goes to the first of them, as it does on the API.
+                lined = piece[:, : whole * step_c].reshape(deep, whole, step_c).transpose(1, 0, 2).reshape(whole, -1)
+                strongest = np.abs(lined).argmax(axis=1)
+                cells[row, block : block + whole] = lined[np.arange(whole), strongest]
+            if (right - left) % step_c:
+                rest = piece[:, whole * step_c :].reshape(-1)
+                cells[row, block + whole] = rest[int(np.abs(rest).argmax())]
+    finite = np.where(np.isfinite(cells), cells, 0.0)
+    low, high = float(finite.min()), float(finite.max())
+    if high - low > 1e-12:
+        packed = np.round((finite - low) / (high - low) * 255.0).astype(np.uint8)
+    else:
+        packed = np.zeros(finite.shape, dtype=np.uint8)
+    return {
+        "shape": [int(rows), int(cols)],
+        "range": [low, high],
+        "encoding": "u8",
+        "data": base64.b64encode(packed.tobytes(order="C")).decode("ascii"),
+        "pool": "strongest",
+    }
+
+
 def tensor_stats(array: Any) -> Dict[str, Any]:
-    """Summary statistics in the API's schema, for structure-only (``$shape``) uploads."""
+    """Summary statistics in the API's schema, for structure-only (``$shape``) uploads.
+
+    A tensor of more than :data:`SUMMARY_PIECE_VALUES` values is read a piece at a time, so summarising a
+    model of many gigabytes never holds a second copy of one of its tensors.
+    """
+    if int(getattr(array, "size", 0)) > SUMMARY_PIECE_VALUES and getattr(getattr(array, "dtype", None), "kind", "") in "fiub":
+        return _stats_in_pieces(array)
     flat = np.asarray(array, dtype=float).ravel()
     if flat.size == 0:
         return {
@@ -161,18 +300,47 @@ def tensor_stats(array: Any) -> Dict[str, Any]:
 
 def encode_tensor(array: Any, dtype: str = "f32") -> bytes:
     """Little-endian, zlib-compressed bytes the tensor endpoint accepts."""
-    kinds = {"f16": "<f2", "f32": "<f4", "f64": "<f8"}
-    if dtype not in kinds:
-        raise StructureError(f"Unsupported tensor dtype '{dtype}'. Use f16, f32 or f64.", code="invalid_tensor")
-    return zlib.compress(np.ascontiguousarray(np.asarray(array), dtype=kinds[dtype]).tobytes(), 6)
+    if dtype not in TENSOR_DTYPES:
+        raise StructureError(
+            f"Unsupported tensor dtype '{dtype}'. Use f16, f32 or f64, or i8, i16, i32, i64, u8 or bool.",
+            code="invalid_tensor",
+        )
+    return zlib.compress(np.ascontiguousarray(np.asarray(array), dtype=TENSOR_DTYPES[dtype]).tobytes(), 6)
+
+
+def tensor_dtype(array: Any) -> str:
+    """The stored type a tensor uploads as: its own number type, or the nearest one the API stores.
+
+    Whole numbers and flags keep their type (an index table is not rounded through floats); an unsigned type
+    the API has no name for goes up to the signed one that holds it. Anything that is not an array of whole
+    numbers is ``f64`` when it is double precision, ``f16`` when half, and ``f32`` otherwise.
+    """
+    dtype = getattr(array, "dtype", None)
+    kind = str(getattr(dtype, "kind", ""))
+    name = str(dtype)
+    if kind == "b":
+        return "bool"
+    if kind == "i":
+        return {"int8": "i8", "int16": "i16", "int32": "i32"}.get(name, "i64")
+    if kind == "u":
+        return {"uint8": "u8", "uint16": "i32"}.get(name, "i64")
+    if name == "float64":
+        return "f64"
+    return "f16" if name == "float16" else "f32"
 
 
 @dataclass
 class Extraction:
-    """A JSON-ready spec plus the tensors that were lifted out of it for binary upload."""
+    """A JSON-ready spec plus the tensors that were lifted out of it for binary upload.
+
+    ``onnx`` holds the ONNX model the spec was read from, as bytes, when this client converted a live model
+    to get it (``None`` otherwise). It is never uploaded: it is what the model's agent can run to say what
+    every step computed (``kaimei.agent.serve(client, model, onnx=extraction.onnx)``).
+    """
 
     spec: Dict[str, Any]
     tensors: Dict[str, Any] = field(default_factory=dict)
+    onnx: Optional[bytes] = None
 
     @property
     def externalized(self) -> bool:
@@ -202,13 +370,26 @@ def finalize_spec(
 
     ``weights="summary"`` replaces every learned tensor with ``{"$shape", "stats"}`` so no
     values are sent; existing ``$tensor`` references are summarised from ``tensors`` when
-    given. Otherwise tensors with more than ``externalize_above`` values become
+    given. ``weights="pictures"`` is a summary that also sends a small picture of each such
+    tensor (see :func:`tensor_view`): asked for, never assumed, because a picture of a small
+    tensor is the tensor. Otherwise tensors with more than ``externalize_above`` values become
     ``{"$tensor": key}`` references and are returned in :attr:`Extraction.tensors`;
     ``None`` keeps everything inline. A check on the upload goes only with the real weights.
     """
-    if weights not in {"full", "summary"}:
-        raise StructureError("weights must be 'full' or 'summary'.", code="invalid_structure", param="weights")
+    if weights not in WEIGHTS_MODES:
+        raise StructureError(
+            "weights must be 'full', 'summary' or 'pictures'.", code="invalid_structure", param="weights"
+        )
+    asked = weights
+    pictures = weights == "pictures"
+    if pictures:
+        weights = "summary"  # everything a summary does, and the pictures on top
     numpy = _require_numpy()
+    if str(spec.get("family") or "") == "graph":
+        # A general model graph keeps its tensors in its own number types, under its own names.
+        from .graphs import finalize_graph
+
+        return finalize_graph(spec, weights=asked, externalize_above=externalize_above, tensors=tensors)
     if weights == "summary" and (spec.get("nodes") or spec.get("trees") or spec.get("family") == "composite"):
         return Extraction(spec=_trees_in_summary(spec, tensors), tensors={})
     out = dict(spec)
@@ -229,14 +410,22 @@ def finalize_spec(
                 if value is None:
                     continue
                 layer[key] = _finalize_tensor(
-                    value, key, f"{prefix}{layer_id}.{key}", weights, externalize_above, tensors, lifted, numpy
+                    value, key, f"{prefix}{layer_id}.{key}", weights, externalize_above, tensors, lifted, numpy, pictures
                 )
             params = layer.get("params")
             if isinstance(params, Mapping):
                 # An opaque step's tensors, named as its framework names them.
                 layer["params"] = {
                     str(name): _finalize_tensor(
-                        value, str(name), f"{prefix}{layer_id}.{name}", weights, externalize_above, tensors, lifted, numpy
+                        value,
+                        str(name),
+                        f"{prefix}{layer_id}.{name}",
+                        weights,
+                        externalize_above,
+                        tensors,
+                        lifted,
+                        numpy,
+                        pictures,
                     )
                     for name, value in params.items()
                 }
@@ -254,7 +443,7 @@ def finalize_spec(
     if isinstance(spec.get("members"), list):
         members = []
         for index, member in enumerate(spec["members"]):
-            part = finalize_spec(member, weights=weights, externalize_above=externalize_above, tensors=tensors, prefix=f"{prefix}m{index}.")
+            part = finalize_spec(member, weights=asked, externalize_above=externalize_above, tensors=tensors, prefix=f"{prefix}m{index}.")
             members.append(part.spec)
             lifted.update(part.tensors)
         out["members"] = members
@@ -274,6 +463,7 @@ def _finalize_tensor(
     tensors: Optional[Mapping[str, Any]],
     lifted: Dict[str, Any],
     numpy: Any,
+    pictures: bool = False,
 ) -> Any:
     """One tensor of a layer as the spec sends it: a JSON list, a binary reference, or a ghost."""
     if isinstance(value, Mapping):
@@ -282,19 +472,34 @@ def _finalize_tensor(
             shape = list(value.get("shape") or getattr(known, "shape", None) or ())
             ghost: Dict[str, Any] = {"$shape": [int(dim) for dim in shape] or [1], "dtype": "f32"}
             if known is not None and _stats_say_little(key, known):
-                ghost["stats"] = tensor_stats(known)
+                _describe_ghost(ghost, known, pictures)
             return ghost
         return value
-    array = numpy.asarray(value, dtype=float)
     if weights == "summary":
-        ghost = {"$shape": [int(dim) for dim in array.shape] or [1], "dtype": "f32"}
-        if _stats_say_little(key, array):
-            ghost["stats"] = tensor_stats(array)
+        # Read as it is: a copy in double precision of a tensor of many gigabytes is what a summary must not need.
+        kept = numpy.asarray(value)
+        if kept.dtype.kind not in "fiub":
+            kept = numpy.asarray(value, dtype=float)
+        ghost = {"$shape": [int(dim) for dim in kept.shape] or [1], "dtype": "f32"}
+        if _stats_say_little(key, kept):
+            _describe_ghost(ghost, kept, pictures)
         return ghost
+    array = numpy.asarray(value, dtype=float)
     if externalize_above is not None and array.size > externalize_above:
         lifted[tensor_key] = numpy.ascontiguousarray(array, dtype=numpy.float32)
         return {"$tensor": tensor_key, "shape": [int(dim) for dim in array.shape], "dtype": "f32"}
     return array.tolist() if array.ndim else float(array)
+
+
+def _describe_ghost(ghost: Dict[str, Any], array: Any, pictures: bool = False) -> None:
+    """What a tensor sent without its values still says of itself: its statistics and, when asked for, a small
+    picture of it."""
+    ghost["stats"] = tensor_stats(array)
+    if not pictures:
+        return
+    view = tensor_view(array)
+    if view is not None:
+        ghost["view"] = view
 
 
 def _stats_say_little(key: str, array: Any) -> bool:
@@ -502,14 +707,66 @@ def extract_structure(
     check_rows: Any = None,
     on_unsupported: str = "draw",
     metadata: Optional[Mapping[str, Any]] = None,
+    via: str = "auto",
+    sample: Any = None,
+    inputs: Optional[Mapping[str, Any]] = None,
+    output: Any = None,
+    mask_layout: Optional[str] = None,
+    threshold: Optional[float] = None,
+    tokenizer: Any = None,
+    labels: Optional[Sequence[Any]] = None,
+    max_length: Optional[int] = None,
+    sampler: Any = None,
 ) -> Extraction:
     """Read a fitted estimator into a spec plus the tensors to upload as binary.
+
+    ``via`` picks the route. ``"native"`` uses Kaimei's own readers (linear models, MLPs, trees and models made
+    of them, dense and convolutional networks). ``"onnx"`` converts the model to ONNX in memory, here, and reads
+    that as a graph of operators: this is the route for recurrent networks, transformers, models with several
+    inputs, and the scikit-learn estimators with no reader of their own. It needs ``onnx``, and the converter
+    for the framework (``torch``'s own exporter, ``skl2onnx``, ``tf2onnx``). ``"auto"`` (the default) uses the
+    native readers and tries ONNX only when they cannot read the model, or can only draw it; a conversion that
+    does not reproduce the model is not used. An ONNX model itself (a ``.onnx`` path, its bytes, or an
+    ``onnx.ModelProto``) is always read as a graph, whatever ``via`` says.
+
+    ``inputs``, ``tokenizer``, and an ``output`` other than a module's first, are read only from a model converted
+    to ONNX (Kaimei's own readers read one table or picture and a module's first output): with any of them
+    ``"auto"`` converts the model first and never falls back to a reading that would leave them out, and
+    ``"native"`` refuses them. Every argument is checked before the model is read, on every route: a ``sample``
+    the model cannot be called with, an ``inputs`` entry for an input it does not have, an ``output`` it does not
+    give, a tokenizer for a model that takes no token ids or a ``max_length`` that is not a whole number is an
+    error that names the argument.
+
+    For the ONNX route: ``sample`` is an example input, as you would call the model with it (a tensor or array
+    with its batch axis, or a tuple or dict of them for a model with several inputs). It is required for models
+    that take whole numbers (token ids) or several inputs; without it a table of ``feature_names`` or an image
+    of ``input_shape`` is assumed. ``inputs`` says what an input is when its shape does not: ``{"ids":
+    {"feature": "review", "part": "ids"}}``, ``{"pixels": {"feature": "photo", "layout": "nchw"}}``. ``output``
+    names the output the prediction is read from when the model has several (its position, for a PyTorch
+    module). ``tokenizer`` turns a token input into a text feature: a Kaimei tokenizer description, or a
+    HuggingFace tokenizer (see :func:`kaimei.text.tokenizer_spec`). ``labels`` names the classes. For a segmentation
+    with ambiguous axes, set ``mask_layout`` to ``chw``, ``hwc`` or ``indices``. For a segmentation whose mask is
+    one score for each pixel, ``threshold`` says where that score is cut, in the model's own numbers: a pixel is
+    the foreground at that score or more. It is found from the model when not given (one half for a model that
+    ends in a sigmoid, zero for raw scores), and refused for any other model. (A yes-or-no classifier's own
+    threshold is another thing: ``outputs.threshold`` of its structure.)
+
+    A graph's shapes are fixed when the model is converted, so a model that reads tokens is converted for one
+    number of them: as many as ``sample`` holds. That is the most tokens it is ever given on Kaimei (a longer
+    text is cut), and for a language model the prompt and what it writes after it share them. ``max_length``
+    says how many instead: the sample's token inputs are filled up to it with the padding token, or cut down.
 
     ``check_rows`` are rows to compare the reading with the estimator on, besides the ones this picks itself. A model
     can agree around zero and disagree on the data it actually sees.
 
+    ``sampler`` makes a diffusion model's denoiser generate pictures: a ``diffusers`` scheduler (its noise schedule
+    and what the model predicts are read from it) or a dict of Kaimei's sampler settings. A ``diffusers`` pipeline
+    can be given in place of the estimator: its denoiser is read, with its own scheduler.
+
     ``weights="summary"`` keeps the weights private: the spec carries shapes and statistics
-    only, and the model is drawable but not executable on Kaimei.
+    only, and the model is drawable but not executable on Kaimei. ``weights="pictures"`` adds a
+    small picture of each large tensor (:func:`tensor_view`), which is the tensor itself when the
+    tensor is 64 by 64 values or fewer.
 
     ``input_shape`` is the image size in the framework's own order: ``(channels, height,
     width)`` for PyTorch (required for convolutional modules), ``(height, width, channels)``
@@ -519,17 +776,95 @@ def extract_structure(
 
     A layer or operation Kaimei cannot replay (attention, a matmul, a reshape) becomes an ``opaque``
     step: drawn from its name, attributes, output shape and tensors, never run, and the whole model
-    is then drawn rather than run. ``on_unsupported="error"`` raises ``unsupported_layers`` instead.
+    is then drawn rather than run. ``on_unsupported="error"`` raises ``unsupported_layers`` instead, and it does
+    so for any reading Kaimei would only draw, whichever route made it: one that does not give the model's own
+    outputs, or a summary of its feature importances. (``weights="summary"`` is a choice of what to send, and
+    is not refused for it.)
 
     The spec records where it came from (the model's class, the framework and its version, this client's
     version and when); ``metadata`` adds your own entries to that, e.g. ``{"training_run": "exp-42"}``.
     """
     if on_unsupported not in {"draw", "error"}:
         raise StructureError("on_unsupported must be 'draw' or 'error'.", code="invalid_structure", param="on_unsupported")
-    raw = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess, check_rows)
+    if via not in ROUTES:
+        raise StructureError("via must be 'auto', 'native' or 'onnx'.", code="invalid_structure", param="via")
+    from . import graphs as _graphs
+
+    estimator, scheduler = _graphs.unwrap_pipeline(estimator)
+    if sampler is None and scheduler is not None:
+        sampler = scheduler
+    if task is None and (sampler is not None or _is_diffusion_denoiser(estimator)):
+        task = "generation"
+    # A list from here on, made before anything reads the names: an array or an Index has no truth value of its
+    # own, and a generator can be read once, so whatever read it first would leave the rest with no names.
+    labels = label_names(labels)
+    with _generators_as_they_were(estimator):
+        _check_arguments(
+            estimator,
+            feature_names=feature_names,
+            task=task,
+            input_shape=input_shape,
+            preprocess=preprocess,
+            sample=sample,
+            inputs=inputs,
+            output=output,
+            tokenizer=tokenizer,
+            labels=labels,
+            max_length=max_length,
+        )
+    # What the caller asked for that only a conversion reads (a denoiser's input, filled in below, is not theirs).
+    asked = _onnx_only_arguments(estimator, inputs, output, tokenizer, task)
+    if mask_layout is not None:
+        if mask_layout not in ("chw", "hwc", "indices") or task not in (None, "segmentation"):
+            raise StructureError("Use mask_layout='chw', 'hwc' or 'indices' for segmentation.", param="mask_layout")
+        task = "segmentation"
+        asked.append("mask_layout")
+    if threshold is not None:
+        # Where a mask's one score for each pixel is cut: read by the importer alone, which also says when it
+        # does not apply (several classes, class numbers, another task) or is no number.
+        asked.append("threshold")
+    if (sampler is not None or _is_diffusion_denoiser(estimator)) and inputs is None and _is_torch_module(estimator):
+        # The noisy picture a denoiser is handed is any numbers at all, not pixels in a range: a tensor.
+        first = next(iter(inspect.signature(estimator.forward).parameters), None)
+        if first is not None:
+            inputs = {first: {"feature": first}}
+    kept: Dict[str, Any] = {}
+    with _generators_as_they_were(estimator):
+        raw = _extract_by_route(
+            estimator,
+            via,
+            feature_names=feature_names,
+            task=task,
+            framework=framework,
+            input_shape=input_shape,
+            preprocess=preprocess,
+            check_rows=check_rows,
+            sample=sample,
+            inputs=inputs,
+            output=output,
+            tokenizer=tokenizer,
+            labels=labels,
+            max_length=max_length,
+            kept=kept,
+            mask_layout=mask_layout,
+            threshold=threshold,
+            asked=asked,
+        )
+    _say_where_its_class_comes_from(raw, estimator)
     if metadata:
         raw["metadata"] = {**raw.get("metadata", {}), **{str(key): value for key, value in metadata.items()}}
-    if on_unsupported == "error":
+    if sampler is not None:
+        raw["sampler"] = _graphs.sampler_spec(sampler, raw)
+    elif _is_diffusion_denoiser(estimator):
+        warnings.warn(
+            "This is a diffusion model's denoiser, uploaded without its scheduler, so Kaimei runs it once instead "
+            "of sampling with it. Pass sampler=<its diffusers scheduler>, or upload the pipeline.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if on_unsupported == "error" and not _runs(raw):
+        # Whichever route read it: a step Kaimei cannot replay, a reading that does not give the model's own answers
+        # (a graph whose conversion does not reproduce it, a network that branches on its input), or a summary.
         drawn = drawn_steps(raw)
         if drawn:
             listed = "; ".join(drawn[:6]) + ("; …" if len(drawn) > 6 else "")
@@ -538,12 +873,756 @@ def extract_structure(
                 "inference endpoint instead, or let on_unsupported='draw' draw them.",
                 code="unsupported_layers",
             )
+        said = str(raw.get("summary") or "").strip()
+        if "drawn, not run" not in said:
+            said = f"{said} Kaimei would draw this model, not run it.".strip()
+        raise StructureError(
+            f"{said} on_unsupported='error' refuses it: register it with a remote inference endpoint or an agent, or "
+            "let on_unsupported='draw' draw it.",
+            code="unsupported_layers",
+        )
     extraction = finalize_spec(raw, weights=weights, externalize_above=externalize_above)
     if externalize_above == EXTERNALIZE_ABOVE and spec_payload_bytes(extraction.spec) >= WARN_STRUCTURE_BYTES:
         # A CNN holds dozens of kernels under the default threshold (MobileNetV2: 16 MB of JSON).
         # Lift those as well, unless the caller chose a threshold.
         extraction = finalize_spec(raw, weights=weights, externalize_above=COMPACT_EXTERNALIZE_ABOVE)
+    if str(raw.get("family") or "") == "graph" and kept.get("onnx") is not None:
+        extraction.onnx = bytes(kept["onnx"])
     return extraction
+
+
+@contextlib.contextmanager
+def _generators_as_they_were(estimator: Any) -> Any:
+    """Put PyTorch's random generators back as they were once a module has been read.
+
+    Reading a module calls it: to try the caller's ``sample`` on it, to compare a reading with it, to convert it.
+    One that draws at random when it is called (a sampling layer, noise it adds) draws from the caller's own
+    generators, on the CPU and on its GPU, and would leave them moved on. Whichever route reads the module, and
+    whether it reads it or refuses it, what the caller's program draws next is what it would have drawn.
+    """
+    kept: Optional[Dict[str, Any]] = None
+    torch: Any = None
+    if _is_torch_module(estimator):
+        try:
+            import torch as torch_module
+
+            from . import graphs
+
+            torch = torch_module
+            kept = graphs._random_state(estimator, torch)
+        except Exception:  # noqa: BLE001 - no torch here, or a module that cannot say where it is: nothing to keep
+            kept = None
+    try:
+        yield
+    finally:
+        if kept is not None:
+            from . import graphs
+
+            graphs._put_back_random_state(kept, torch)
+
+
+#: Errors of the native readers that say "this model is not one of mine", which ONNX may still read.
+_ONNX_MAY_READ = {"unsupported_estimator", "unsupported_layers", "invalid_structure"}
+#: Arguments a caller got wrong. Another route would not make them right, and could hide the mistake.
+_CALLER_ARGUMENTS = {"feature_names", "preprocess", "on_unsupported", "weights", "via", "labels", "max_length"}
+#: The ONNX route's own arguments: a conversion that says one of them is wrong is not overruled by a native reading.
+_ONNX_ARGUMENTS = {
+    "labels", "inputs", "sample", "output", "tokenizer", "max_length", "sampler", "task", "mask_layout", "threshold",
+}
+
+
+def _extract_by_route(
+    estimator: Any,
+    via: str,
+    *,
+    feature_names: Optional[Sequence[str]],
+    task: Optional[str],
+    framework: Optional[str],
+    input_shape: Any,
+    preprocess: Optional[Mapping[str, Any]],
+    check_rows: Any,
+    sample: Any,
+    inputs: Optional[Mapping[str, Any]],
+    output: Any,
+    mask_layout: Optional[str] = None,
+    threshold: Optional[float] = None,
+    tokenizer: Any,
+    labels: Optional[Sequence[Any]],
+    max_length: Optional[int] = None,
+    kept: Optional[Dict[str, Any]] = None,
+    asked: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """The raw spec by the route asked for. See :func:`extract_structure` for what each route is.
+
+    ``kept`` receives the converted ONNX model's bytes under ``"onnx"`` when the spec returned was read from one.
+    ``asked`` names the caller's arguments that only a conversion reads (:func:`_onnx_only_arguments`): with them
+    the conversion is tried first, and Kaimei's own readers, whose reading would leave them out, are not asked.
+    """
+    from . import graphs
+
+    if graphs.is_onnx(estimator):
+        # A graph already, whatever the route: Kaimei's own readers have nothing else to read in an ONNX model.
+        return graphs.from_onnx(
+            estimator,
+            feature_names=feature_names,
+            task=task,
+            labels=labels,
+            inputs=inputs,
+            input_shapes=input_shape,
+            samples=sample,
+            output=output,
+            mask_layout=mask_layout,
+            threshold=threshold,
+            tokenizer=tokenizer,
+            check_rows=check_rows,
+            framework=framework or "onnx",
+            max_length=max_length,
+        )
+    if via == "native":
+        if asked:
+            # The argument that says most: one the caller wrote for this model before the task it implies.
+            raise _left_out_by_the_native_readers(next((name for name in asked if name != "task"), asked[0]))
+        read = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess, check_rows)
+        return _with_labels(read, labels)
+    options: Dict[str, Any] = {
+        "feature_names": feature_names,
+        "task": task,
+        "framework": framework,
+        "input_shape": input_shape,
+        "preprocess": preprocess,
+        "check_rows": check_rows,
+        "sample": sample,
+        "inputs": inputs,
+        "output": output,
+        "tokenizer": tokenizer,
+        "labels": labels,
+        "max_length": max_length,
+        "keep": kept,
+    }
+    if mask_layout is not None:
+        options["mask_layout"] = mask_layout
+    if threshold is not None:
+        options["threshold"] = threshold
+    reasons: List[str] = []
+    converted: Optional[Dict[str, Any]] = None
+    from . import converters, tabular_pipelines, text_pipelines
+
+    only_converted = converters.model_file_kind(estimator) is not None or converters.is_jax(estimator, framework)
+    pipelines = text_pipelines.text_parts(estimator) is not None or tabular_pipelines.column_parts(estimator) is not None
+    if only_converted or pipelines:
+        # A TensorFlow file, a GGUF file, a JAX model or a bag-of-words text pipeline: only a conversion reads them.
+        converted = graphs.via_onnx(estimator, reasons=reasons, **options)
+        if converted is None:
+            why = said_together(reasons) or "no converter takes this kind of model"
+            raise StructureError(f"This model could not be converted to ONNX: {why}.", code="unsupported_estimator")
+        return converted
+    if via == "onnx":
+        _names_fit(estimator, feature_names)
+        converted = graphs.via_onnx(estimator, reasons=reasons, **options)
+        if converted is None:
+            why = said_together(reasons) or "no converter takes this kind of model"
+            raise StructureError(f"This model could not be converted to ONNX: {why}.", code="unsupported_estimator")
+        return converted
+    tried = False
+    if asked or _only_onnx_can_feed(estimator, sample):
+        # The native readers call a module with a table of floats or a picture, and read its first output. One that
+        # takes token ids, a series or several inputs they could only list the layers of, and what the caller says
+        # of a model's inputs, of its outputs or of its tokenizer they would leave out: the conversion goes first.
+        tried = True
+        converted = graphs.via_onnx(estimator, reasons=reasons, **options)
+        if converted is not None and not converted.get("approximate"):
+            return converted
+        if asked and converted is not None and graphs.NOT_ITS_CLASS in str(converted.get("summary") or ""):
+            # Converted as the caller described it, with the model's own scores: only the class Kaimei would take
+            # from them is not the model's on some row of its check. It is uploaded drawn, and its summary says so.
+            return converted
+        if asked:
+            # A reading by Kaimei's own readers would not be the model the caller described.
+            raise _not_converted_as_asked(asked, reasons, converted)
+    refused: Optional[StructureError] = None
+    native: Optional[Dict[str, Any]] = None
+    try:
+        native = _extract_raw(estimator, feature_names, task, framework, input_shape, preprocess, check_rows)
+    except StructureError as exc:
+        network = _is_torch_module(estimator) or _is_keras_model(estimator)
+        unnamed = exc.param == "feature_names" and feature_names is None and network
+        if exc.code not in _ONNX_MAY_READ or (exc.param in _CALLER_ARGUMENTS and not unnamed):
+            raise
+        refused = exc
+    if native is not None and not _better_through_onnx(native, estimator):
+        if kept is not None:
+            kept.pop("onnx", None)  # a conversion that was tried and not used is not what was read
+        return _with_labels(native, labels)
+    if not tried:
+        try:
+            converted = graphs.via_onnx(estimator, reasons=reasons, **options)
+        except StructureError as exc:
+            if exc.param in _ONNX_ARGUMENTS:
+                raise  # the caller's own argument is wrong: the native reading would only hide it
+            # The native readers already ran, and a route that was only being tried must not take their answer away.
+            reasons.append(exc.message)
+            converted = None
+    if converted is not None and not converted.get("approximate"):
+        return converted
+    if converted is not None and native is None and graphs.NOT_ITS_CLASS in str(converted.get("summary") or ""):
+        # Its scores are the model's, and the class Kaimei would take from them is not the model's own on some row of
+        # its check. Nothing else reads this model, so the conversion is what is uploaded: drawn, not run, with a
+        # summary that says on how many rows the class differs.
+        return converted
+    if converted is not None:
+        # Why it is drawn, as the conversion says (it differs, or could not be compared and why), when it says.
+        reasons.append(graphs._drawn_because(converted) or "the conversion does not reproduce the model's outputs")
+    if native is not None and tried and not _runs(native):
+        if _is_keras_model(estimator) and not _is_torch_module(estimator):
+            # A Keras model declares its inputs, so its conversion was tried first although nothing new was asked
+            # for. Its readers' drawing is the one clients before 0.12.0 uploaded, and it is drawn from the
+            # model's own layers: it stands when the conversion cannot be used.
+            return _keras_drawn(native, reasons, labels, kept)
+        # The readers can only list the layers of a module they cannot call (token ids, several inputs, a
+        # series): a list like that is not this model, so the failed conversion is the answer.
+        why = said_together(reasons) or "the conversion failed"
+        raise StructureError(
+            f"This model could not be converted to ONNX: {why}. Kaimei's own readers cannot call it with this "
+            "input, so it was not read that way either. Fix what stops the conversion, pass via='native' to upload "
+            "a list of its layers anyway, or register it with an agent (kaimei.agent) to run it where it is.",
+            code="unsupported_estimator",
+        )
+    if native is not None:
+        if kept is not None:
+            kept.pop("onnx", None)
+        if reasons:
+            # Why this model is only drawn, where a reader of the structure will find it.
+            noted = said_together(reasons)
+            native["metadata"] = {**dict(native.get("metadata") or {}), "onnx_route": f"not used: {noted}"[:400]}
+        return _with_labels(native, labels)
+    assert refused is not None
+    why = said_together(reasons)
+    if not why:
+        raise refused
+    raise StructureError(
+        f"{refused.message} Converting it to ONNX was tried as well: {why}.",
+        code=refused.code or "invalid_structure",
+        param=refused.param,
+    ) from refused
+
+
+#: What each argument only a conversion reads says, for the error that refuses it on the native route.
+_ONNX_ONLY_ARGUMENTS = {
+    "mask_layout": "mask_layout identifies the class axis of a segmentation output",
+    "threshold": "threshold says where a segmentation's one score for each pixel is cut",
+    "inputs": "inputs says what each input of a model converted to ONNX is",
+    "output": "output picks which output of a model converted to ONNX is its prediction",
+    "tokenizer": "tokenizer makes a token input of a model converted to ONNX a text feature",
+    "task": "task says the model answers with a mask or with boxes, which only a model converted to ONNX is read for",
+}
+
+#: Tasks whose answer is read by a head only a conversion writes: where a mask's classes lie and where it is cut,
+#: which columns are a box. Kaimei's own readers read class scores and numbers.
+_TASKS_ONLY_CONVERTED = ("segmentation", "object_detection")
+
+
+def _onnx_only_arguments(
+    estimator: Any, inputs: Any, output: Any, tokenizer: Any, task: Optional[str] = None
+) -> List[str]:
+    """The caller's arguments that only a model converted to ONNX is read with: what its inputs are, an output
+    other than a module's first, a tokenizer for its token ids, and a task whose answer is a mask or boxes.
+
+    Kaimei's own readers read one table or picture and a module's first output, so a reading of theirs would leave
+    these out, and the model uploaded would not be the one the caller described: read by them as a segmenter, a
+    module was called exact and could not answer one prediction (its head says nothing of how a mask is read).
+    """
+    found: List[str] = []
+    if task in _TASKS_ONLY_CONVERTED:
+        found.append("task")
+    if inputs:
+        found.append("inputs")
+    module = _is_torch_module(estimator) and not _is_keras_model(estimator)
+    first = (_is_whole(output) and int(output) == 0) or (isinstance(output, str) and output in ("output", "output_0"))
+    if output is not None and not (module and first):
+        found.append("output")
+    if tokenizer is not None:
+        found.append("tokenizer")
+    return found
+
+
+def said_together(reasons: Sequence[Any]) -> str:
+    """Reasons as one clause, each said once and without a full stop of its own: the sentence they are put in
+    ends in one."""
+    return "; ".join(dict.fromkeys(str(reason).strip().rstrip(".").rstrip() for reason in reasons if str(reason).strip()))
+
+
+def _left_out_by_the_native_readers(name: str) -> StructureError:
+    return StructureError(
+        f"{_ONNX_ONLY_ARGUMENTS[name]}, and via='native' reads this model with Kaimei's own readers, which read one "
+        f"table or picture and a module's first output. Leave {name} out, or pass via='auto' or via='onnx'.",
+        code="invalid_structure",
+        param=name,
+    )
+
+
+def _not_converted_as_asked(
+    asked: Sequence[str], reasons: Sequence[str], converted: Optional[Mapping[str, Any]]
+) -> StructureError:
+    """Why a model described with arguments only a conversion reads was not read: the conversion was not used."""
+    from . import graphs
+
+    why = list(dict.fromkeys(reasons))
+    if converted is not None:
+        why.append(graphs._drawn_because(converted) or "the conversion does not reproduce the model's outputs")
+    listed = " and ".join(asked)
+    drawn = " Pass via='onnx' to upload the conversion drawn, not run." if converted is not None else ""
+    return StructureError(
+        f"This model could not be converted to ONNX: {said_together(why) or 'the conversion failed'}. {listed} "
+        f"{'is' if len(asked) == 1 else 'are'} read only from a model converted to ONNX (Kaimei's own readers read one "
+        "table or picture and a module's first output), so it was not read another way. Fix what stops the "
+        f"conversion, or leave {listed} out to read the model with Kaimei's own readers.{drawn}",
+        code="unsupported_estimator",
+    )
+
+
+def _keras_drawn(
+    native: Dict[str, Any], reasons: Sequence[str], labels: Optional[Sequence[Any]], kept: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """A Keras model whose conversion cannot be used, as Kaimei's own readers draw it, with a warning that says why."""
+    why = said_together(reasons) or "the conversion failed"
+    warnings.warn(
+        "Kaimei runs a Keras model whose input is not a table or a picture (a series, token ids, several inputs) "
+        f"through ONNX, converted by tf2onnx, and this model's conversion was not used: {why}. It was read by "
+        "Kaimei's own readers instead, as clients before 0.12.0 read it: drawn, not run.",
+        UserWarning,
+        stacklevel=4,
+    )
+    if kept is not None:
+        kept.pop("onnx", None)  # a conversion that was tried and not used is not what was read
+    native["metadata"] = {**dict(native.get("metadata") or {}), "onnx_route": f"not used: {why}"[:400]}
+    return _with_labels(native, labels)
+
+
+#: Said in a structure's metadata when the class Kaimei gives a row can differ from the model's own ``predict``.
+PREDICTED_CLASS_NOTE = (
+    "The most probable class of predict_proba. For SVC and NuSVC with probability=True, scikit-learn documents that "
+    "this can differ from predict() on some rows: predict() goes by the margin, and the probabilities come from a "
+    "separate fit."
+)
+
+
+def _say_where_its_class_comes_from(raw: Dict[str, Any], estimator: Any) -> None:
+    """Note, and warn, when the class Kaimei gives a running graph can differ from the model's own ``predict``.
+
+    An SVC or NuSVC with ``probability=True`` is converted with its ``predict_proba``, which Kaimei reproduces, and
+    Kaimei's class for a row is the most probable of those. Its ``predict`` goes by the margin instead (as does a
+    one-vs-rest or a hard vote of such models), so on some rows the two disagree. Kaimei's own readers draw such a
+    model for that reason; converted, it runs, and the structure says what its class is.
+    """
+    meta = dict(raw.get("metadata") or {})
+    if str(raw.get("family") or "") != "graph" or raw.get("approximate") or meta.get("library_method") != "predict_proba":
+        return
+    if not predicts_by_its_margin(estimator):
+        return
+    raw["metadata"] = {**meta, "predicted_class": PREDICTED_CLASS_NOTE}
+    warnings.warn(
+        "Kaimei runs this model's predict_proba, converted to ONNX, and its class for a row is the most probable class "
+        "of those probabilities. For SVC and NuSVC with probability=True, scikit-learn documents that this can differ "
+        "from predict() on some rows: predict() goes by the margin, and the probabilities come from a separate fit. "
+        "Pass via='native' to upload it drawn, not run, instead.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _is_whole(value: Any) -> bool:
+    """A whole number of any kind (Python's, NumPy's), and not a flag."""
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
+
+
+def label_names(labels: Any) -> Optional[List[str]]:
+    """``labels`` as a list of names, or ``None`` when none were given.
+
+    A list, a tuple, a NumPy array and a pandas Index name a model's classes the same way (``labels=encoder.classes_``
+    is how many callers have them), and only a list can be asked whether it is empty. Each public entry point makes
+    the names a list once, so nothing after it meets an array. One name alone, a dict or a number is refused: the
+    names go with the positions of the model's outputs.
+    """
+    if labels is None:
+        return None
+    if isinstance(labels, (str, bytes, Mapping)) or not hasattr(labels, "__iter__"):
+        raise StructureError(
+            "labels names the model's classes, in the order of its outputs: a list of names.",
+            code="invalid_structure",
+            param="labels",
+        )
+    return [str(label) for label in labels]
+
+
+def _check_arguments(
+    estimator: Any,
+    *,
+    feature_names: Optional[Sequence[str]],
+    task: Optional[str],
+    input_shape: Any,
+    preprocess: Optional[Mapping[str, Any]],
+    sample: Any,
+    inputs: Any,
+    output: Any,
+    tokenizer: Any,
+    labels: Any,
+    max_length: Any,
+) -> None:
+    """Refuse a mistake in the caller's own arguments before any route reads the model, naming the argument.
+
+    Whichever route reads the model, and whether or not it uses the argument, the same mistake is the same error:
+    a route that leaves an argument out must not hide that it was wrong.
+    """
+    from . import graphs
+
+    if max_length is not None:
+        graphs._whole_length(max_length)
+    label_names(labels)  # refused here when they are no list of names
+    if output is not None and not (isinstance(output, (str, Mapping)) or (_is_whole(output) and int(output) >= 0)):
+        raise StructureError(
+            "output picks the output the prediction is read from: its position (0 is the first) or its name, or for "
+            f"a detector a dict of its boxes and scores; got {output!r}.",
+            code="invalid_structure",
+            param="output",
+        )
+    if inputs is not None and (
+        not isinstance(inputs, Mapping) or not all(isinstance(hint, Mapping) for hint in inputs.values())
+    ):
+        raise StructureError(
+            "inputs says what each of the model's inputs is, by its name: a dict of dicts, such as "
+            "{'input_ids': {'feature': 'review', 'part': 'ids'}}.",
+            code="invalid_structure",
+            param="inputs",
+        )
+    if graphs.is_onnx(estimator):
+        return  # a file is not called here: its reader takes these as they are
+    if _is_keras_model(estimator) and not graphs._torch_only(estimator):
+        if sample is not None:
+            _check_keras_sample(estimator, sample)
+    elif _is_torch_module(estimator):
+        _check_module_arguments(
+            estimator,
+            feature_names=feature_names,
+            task=task,
+            input_shape=input_shape,
+            preprocess=preprocess,
+            sample=sample,
+            inputs=inputs,
+            output=output,
+            tokenizer=tokenizer,
+            max_length=max_length,
+        )
+    elif sample is not None:
+        _check_table_sample(estimator, sample)
+
+
+def _not_an_input(name: str, names: Sequence[str]) -> StructureError:
+    return StructureError(
+        f"inputs names '{name}', which is not an input of this model's forward ({', '.join(names)}).",
+        code="invalid_structure",
+        param="inputs",
+    )
+
+
+def _check_module_arguments(
+    module: Any,
+    *,
+    feature_names: Optional[Sequence[str]],
+    task: Optional[str],
+    input_shape: Any,
+    preprocess: Optional[Mapping[str, Any]],
+    sample: Any,
+    inputs: Any,
+    output: Any,
+    tokenizer: Any,
+    max_length: Any,
+) -> None:
+    """A PyTorch module's ``sample``, ``inputs``, ``output`` and ``tokenizer``, tried on the module as its
+    conversion calls it.
+
+    The module is called once, in eval mode and without gradients, with the first row of the example (each part's
+    training flag is put back after). An encoder-decoder or a detector is called by its conversion through a
+    wrapper of its own, so for those only what can be told without calling it is checked.
+    """
+    if sample is None and not inputs and output is None and tokenizer is None:
+        return
+    if not (callable(getattr(module, "modules", None)) and callable(getattr(module, "forward", None))):
+        return
+    try:
+        import torch
+    except ImportError:
+        return
+    from . import graphs
+
+    numpy = _require_numpy()
+    names = graphs._forward_parameters(module)
+    wrapper = {"image"} if preprocess else set()
+    example: Optional[Dict[str, Any]] = None
+    try:
+        example = graphs._torch_example(module, names, feature_names, input_shape, sample, torch)
+    except StructureError as exc:
+        if exc.param is not None:
+            raise
+        # Nothing to call it with: the route that reads it says so in its own words.
+    except Exception as exc:  # noqa: BLE001 - a value that cannot be a tensor, in whichever way torch says so
+        if sample is not None:
+            raise StructureError(
+                f"sample could not be made into this model's inputs ({type(exc).__name__}: {graphs._brief(exc, 200)}).",
+                code="invalid_structure",
+                param="sample",
+            ) from exc
+    # The names its conversion gives its inputs are forward's own, unless the example holds more values than
+    # forward names (``forward(self, x, *rest)``): those are exported as input_0, input_1, ... and hinted by them.
+    listed = list(example) if example is not None and not set(example) <= set(names) else names
+    if inputs and listed:
+        unknown = [str(key) for key in inputs if str(key) not in set(listed) | wrapper]
+        if unknown:
+            raise _not_an_input(unknown[0], listed)
+    if example is None:
+        return
+    for key, hint in (inputs or {}).items():
+        given = example.get(str(key))
+        if isinstance(hint, Mapping) and hint.get("layout") and given is not None and given.dim() != 4:
+            raise StructureError(
+                f"inputs says '{key}' is a picture (layout '{hint['layout']}'), and the model is given it with shape "
+                f"{list(given.shape)}: a picture has a batch axis and three more (channels, height and width, in "
+                "either order).",
+                code="invalid_structure",
+                param="inputs",
+            )
+    told = graphs.hugging_face_hints(module) or graphs.torchvision_hints(module)
+    meant = task or told.get("task")
+    if task == "text_generation" and told.get("task") == "sequence_to_sequence":
+        meant = "sequence_to_sequence"
+    if meant in ("sequence_to_sequence", "object_detection"):
+        return  # called by its conversion through a wrapper of its own (a decoder's first tokens, the boxes joined)
+    if max_length is not None:
+        # As the conversion does: the token inputs filled up to max_length with the padding token, or cut down.
+        counted = {key: value.detach().cpu().numpy() for key, value in example.items() if not value.dtype.is_floating_point}
+        fitted = graphs._fit_tokens(
+            counted, inputs or {}, graphs._pad_token(tokenizer, inputs), graphs._whole_length(max_length), numpy
+        )
+        for key, value in fitted.items():
+            example[key] = torch.as_tensor(value, dtype=example[key].dtype, device=example[key].device)
+    if tokenizer is not None and sample is not None and example and all(
+        value.dtype.is_floating_point for value in example.values()
+    ):
+        raise StructureError(
+            "A tokenizer was given, but none of this model's inputs takes token ids.",
+            code="invalid_structure",
+            param="tokenizer",
+        )
+    rows = max((int(value.shape[0]) if value.dim() else 1 for value in example.values()), default=1)
+    first = [value[:1] if value.dim() and value.shape[0] == rows and rows > 1 else value for value in example.values()]
+    modes = graphs.training_modes(module)
+    module.eval()
+    try:
+        with torch.no_grad():
+            answered = module(*first)
+    except Exception as exc:  # noqa: BLE001 - a module refuses an input in any of the ways its layers can
+        if sample is None:
+            return  # an example made here from feature_names or input_shape: the route that reads it says what is wrong
+        raise StructureError(
+            f"This model could not be called with sample ({type(exc).__name__}: {graphs._brief(exc, 200)}). sample is "
+            "an example input, as you would call the model with it: a tensor or array with its batch axis, or a tuple "
+            "or dict of them for a model with several inputs.",
+            code="invalid_structure",
+            param="sample",
+        ) from exc
+    finally:
+        graphs.restore_modes(modes)
+    produced = graphs._flat_tensors(answered)
+    if output is not None and produced:
+        graphs._torch_output(produced, output)
+
+
+def _check_keras_sample(model: Any, sample: Any) -> None:
+    """Call a Keras model with the first row of ``sample``, as its conversion's check will: a sample it refuses is the
+    caller's to fix, whichever route reads the model."""
+    from . import graphs
+
+    numpy = _require_numpy()
+    try:
+        if isinstance(sample, Mapping):
+            given = [numpy.asarray(value)[:1] for value in sample.values()]
+        elif isinstance(sample, (list, tuple)) and sample and hasattr(sample[0], "shape"):
+            given = [numpy.asarray(value)[:1] for value in sample]
+        else:
+            given = [numpy.asarray(sample)[:1]]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model(given[0] if len(given) == 1 else given, training=False)
+    except Exception as exc:  # noqa: BLE001 - Keras refuses an input in many ways
+        raise StructureError(
+            f"This model could not be called with sample ({type(exc).__name__}: {graphs._brief(exc, 200)}). sample is "
+            "an example input, as you would call the model with it: an array with its batch axis, or a list or dict of "
+            "them for a model with several inputs.",
+            code="invalid_structure",
+            param="sample",
+        ) from exc
+
+
+def _columns_chosen_by_name(estimator: Any, depth: int = 0) -> Optional[List[str]]:
+    """The columns a model picks out of its table by their names, or ``None`` when it picks none that way.
+
+    A pipeline whose ``ColumnTransformer`` names its columns reads those columns wherever they stand in the table,
+    and a table with other columns beside them is still its input: how many columns it was fitted on says nothing
+    about a table it can be called with.
+    """
+    if estimator is None or depth > 4:
+        return None
+    found: List[str] = []
+    # As it was fitted, and as it was made: scikit-learn keeps a part's columns as they were given in both.
+    for chosen in (_safe_attr(estimator, "transformers_"), _safe_attr(estimator, "transformers")):
+        for entry in chosen if isinstance(chosen, (list, tuple)) else []:
+            dropped = isinstance(entry, (list, tuple)) and len(entry) >= 3 and isinstance(entry[1], str) and entry[1] == "drop"
+            if not isinstance(entry, (list, tuple)) or len(entry) < 3 or dropped:
+                continue
+            columns = entry[2]
+            if isinstance(columns, str):
+                found.append(columns)
+            elif isinstance(columns, (list, tuple)) or (hasattr(columns, "tolist") and not callable(columns)):
+                listed = list(columns.tolist() if hasattr(columns, "tolist") else columns)
+                if listed and all(isinstance(column, str) for column in listed):
+                    found.extend(listed)
+    steps = _safe_attr(estimator, "steps")
+    parts = [step[-1] for step in steps if isinstance(step, (list, tuple)) and step] if isinstance(steps, (list, tuple)) else []
+    parts.append(_safe_attr(estimator, "best_estimator_"))  # what a search found is what it predicts with
+    for part in parts:
+        found.extend(_columns_chosen_by_name(part, depth + 1) or [])
+    return list(dict.fromkeys(found)) or None
+
+
+def _check_table_sample(estimator: Any, sample: Any) -> None:
+    """A sample for a model that reads a table has as many columns as the model reads, where the model says how many.
+
+    A model that picks its columns by name is asked for those names instead: the sample is a table with them.
+    """
+    numpy = _require_numpy()
+    named = _columns_chosen_by_name(estimator)
+    if named is not None:
+        columns = getattr(sample, "columns", None)
+        if columns is None:
+            return  # an array, which the model itself refuses or takes: its conversion says which
+        held = {str(column) for column in columns}
+        missing = [name for name in named if name not in held]
+        if missing:
+            raise StructureError(
+                f"sample has no column '{missing[0]}', which this model reads by name. sample is an example input, as "
+                "you would call the model with it: a table that holds the columns the model picks out.",
+                code="invalid_structure",
+                param="sample",
+            )
+        return
+    width = _input_width(estimator)
+    if width is None:
+        return
+    try:
+        shape = numpy.shape(sample)
+    except Exception:  # noqa: BLE001 - not an array of any shape: nothing to compare
+        return
+    if len(shape) == 2 and int(shape[1]) != width:
+        raise StructureError(
+            f"sample has {int(shape[1])} columns, and this model reads {width} features. sample is an example input, as "
+            "you would call the model with it.",
+            code="invalid_structure",
+            param="sample",
+        )
+
+
+def _only_onnx_can_feed(estimator: Any, sample: Any) -> bool:
+    """Whether ``sample`` shows a PyTorch module the native readers have no way to call: more than one input,
+    whole numbers, or anything that is not a table (two axes) or a batch of pictures (four). A Keras model says
+    this of itself: its inputs are declared."""
+    if _is_keras_model(estimator) and not _is_torch_module(estimator):
+        declared = list(getattr(estimator, "inputs", None) or [])
+        if len(declared) > 1:
+            return True
+        if declared:
+            rank = len(getattr(declared[0], "shape", ()) or ())
+            kind = str(getattr(declared[0], "dtype", "float32"))
+            return rank not in (2, 4) or not ("float" in kind or "double" in kind)
+        return False
+    if sample is None or not _is_torch_module(estimator):
+        return False
+    if isinstance(sample, Mapping):
+        values = list(sample.values())
+    elif isinstance(sample, (tuple, list)) and sample and hasattr(sample[0], "shape"):
+        values = list(sample)
+    else:
+        values = [sample]
+    if len(values) != 1:
+        return True
+    only = values[0]
+    kind = str(getattr(only, "dtype", ""))
+    rank = len(getattr(only, "shape", ()) or ())
+    return rank not in (2, 4) or not ("float" in kind or "double" in kind)
+
+
+def _runs(spec: Mapping[str, Any]) -> bool:
+    """Whether a native reading is one Kaimei can run: every step replayed, numbers that match, not a summary."""
+    return not (drawn_steps(spec) or spec.get("approximate") or spec.get("family") == "ensemble_summary" or spec.get("fidelity") == "schematic")
+
+
+def _is_diffusion_denoiser(estimator: Any) -> bool:
+    """A ``diffusers`` U-Net or transformer: the network a diffusion model samples with."""
+    kind = type(estimator).__name__
+    return str(type(estimator).__module__).startswith("diffusers") and (kind.startswith("UNet") or kind.endswith("Transformer2DModel"))
+
+
+def _better_through_onnx(spec: Mapping[str, Any], estimator: Any = None) -> bool:
+    """A native reading that cannot be relied on to run: steps it cannot replay, numbers that do not match, a
+    summary, or a network that was never compared with its module.
+
+    The last is a PyTorch or Keras model the readers could not call on a table or a picture (it takes token
+    ids, a series, several inputs), so its layers were listed in the order they were defined and nothing
+    checked that this is what ``forward`` does.
+    """
+    if drawn_steps(spec) or spec.get("approximate") or spec.get("family") == "ensemble_summary":
+        return True
+    network = estimator is not None and (_is_torch_module(estimator) or _is_keras_model(estimator))
+    return bool(network and spec.get("family") == "network" and spec.get("check") is None)
+
+
+def _names_fit(estimator: Any, feature_names: Optional[Sequence[str]]) -> None:
+    """The two mistakes with names a conversion would hide: the wrong number of them, and another order."""
+    if feature_names is None or _is_torch_module(estimator) or _is_keras_model(estimator):
+        return
+    names = [str(name) for name in feature_names]
+    width = _input_width(estimator)
+    if width is not None and width != len(names):
+        raise StructureError(
+            f"This estimator reads {width} features, got {len(names)} names.",
+            code="invalid_structure",
+            param="feature_names",
+        )
+    fitted = _names_it_was_fitted_on(estimator)
+    if fitted is not None:
+        order = [str(name) for name in list(fitted)]
+        if any(name in order and order.index(name) != at for at, name in enumerate(names)):
+            raise StructureError(
+                f"feature_names is in a different order from the one this estimator was fitted on: {order}.",
+                code="invalid_structure",
+                param="feature_names",
+            )
+
+
+def _with_labels(spec: Dict[str, Any], labels: Optional[Sequence[Any]]) -> Dict[str, Any]:
+    """Name a classifier's classes as the caller does. The names go with the positions of its output."""
+    if not labels:
+        return spec
+    named = [str(label) for label in labels]
+    known = spec.get("classes") or spec.get("labels") or (spec.get("outputs") or {}).get("labels")
+    if known is not None and len(known) != len(named):
+        raise StructureError(
+            f"labels has {len(named)} names, and this model has {len(known)} classes.",
+            code="invalid_structure",
+            param="labels",
+        )
+    spec["outputs"] = {**dict(spec.get("outputs") or {}), "labels": named}
+    if isinstance(spec.get("labels"), list):
+        spec["labels"] = named
+    return spec
 
 
 def _extract_raw(
@@ -687,7 +1766,39 @@ def _checked(spec: Dict[str, Any], estimator: Any, check_rows: Any = None) -> Di
         spec["missing_values"] = True
     if not spec.get("approximate"):
         _attach(spec, upload_check(spec, estimator, names, own))
+        _its_class_is_the_models(spec, estimator, names)
     return spec
+
+
+def _its_class_is_the_models(spec: Dict[str, Any], estimator: Any, names: Sequence[str]) -> None:
+    """A classifier's reading is the model only if the class Kaimei reports for a row is the one ``predict`` gives it.
+
+    ``verify`` compares the two where it compares the scores. This asks once more of every row the check holds, by
+    the rule the API reports a class with (``graphs.reported_class``: an even split is the first class), and a
+    reading whose class differs on any of them is drawn, not run, with a summary that says on how many. A bare
+    booster's ``predict`` gives probabilities, not a class, so there is nothing of its own to compare.
+    """
+    if "check" not in spec or "Booster" in _classes_of(estimator) or not callable(_safe_attr(estimator, "predict")):
+        return
+    from . import graphs
+
+    try:
+        rows = np.array(
+            [[np.nan if value is None else float(value) for value in row] for row in spec["check"].get("rows") or []],
+            dtype=float,
+        )
+        if rows.ndim != 2 or not rows.shape[0]:
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            answers = np.asarray(estimator.predict(_frame_for(estimator, rows, names)))
+    except Exception:  # noqa: BLE001 - a model whose predict cannot be asked here says nothing either way
+        return
+    if answers.shape[0] != rows.shape[0]:
+        return
+    differ, count = graphs.classes_differ(spec, list(answers))
+    if differ:
+        graphs.not_its_class(spec, differ, count)
 
 
 def _attach(spec: Dict[str, Any], check: Optional[Dict[str, Any]]) -> None:
@@ -1450,9 +2561,13 @@ def _supervised_head(classes: Optional[List[str]], task: Optional[str], n_rows: 
     return task or "regression", None, None
 
 
+#: Packages whose objects are PyTorch's own: a package whose name merely begins with "torch" is not one of them.
+_TORCH_PACKAGES = ("torch", "torchvision", "torchaudio", "torchtext")
+
+
 def _is_torch_module(estimator: Any) -> bool:
-    module = estimator.__class__.__module__
-    return module.startswith("torch") or hasattr(estimator, "named_parameters") and hasattr(estimator, "forward")
+    package = str(estimator.__class__.__module__ or "").split(".")[0]
+    return package in _TORCH_PACKAGES or hasattr(estimator, "named_parameters") and hasattr(estimator, "forward")
 
 
 class _Unsupported(Exception):
@@ -1734,7 +2849,26 @@ def _torch_to_spec(
         import torch
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise StructureError("torch is not installed.", code="unsupported_estimator") from exc
+    from .graphs import restore_modes, training_modes
 
+    # The readers run the module in eval mode. Each part gets its own flag back after: a frozen backbone stays
+    # frozen, and a part that was training trains on.
+    modes = training_modes(estimator) if callable(getattr(estimator, "modules", None)) else []
+    try:
+        return _read_torch_module(estimator, names, task, framework, input_shape, preprocess, torch)
+    finally:
+        restore_modes(modes)
+
+
+def _read_torch_module(
+    estimator: Any,
+    names: List[str],
+    task: Optional[str],
+    framework: Optional[str],
+    input_shape: Optional[Sequence[int]],
+    preprocess: Optional[Mapping[str, Any]],
+    torch: Any,
+) -> Dict[str, Any]:
     image = _torch_image_shape(estimator, input_shape)
     if image is not None:
         return _torch_image_spec(estimator, names, task, framework, image, preprocess, torch)
@@ -2564,6 +3698,16 @@ def features_from_spec(spec: Dict[str, Any], value_range: Optional[Sequence[floa
     ``value_range`` (e.g. ``[0, 255]``) is the pixel units an image model reads; Kaimei's
     default is ``[0, 1]``.
     """
+    declared = spec.get("features")
+    if isinstance(declared, list) and declared:
+        if all(isinstance(item, Mapping) and item.get("name") for item in declared):
+            # A general model graph says what each of its inputs is: a column, a picture, text, a series, a tensor.
+            features = [dict(item) for item in declared]
+            if value_range is not None:
+                for item in features:
+                    if str(item.get("type") or "") == "image":
+                        item["value_range"] = [float(value_range[0]), float(value_range[1])]
+            return features
     names = [str(name) for name in spec.get("feature_names") or []]
     shape = image_shape_of(spec)
     if shape and names:
@@ -2586,6 +3730,13 @@ def features_from_spec(spec: Dict[str, Any], value_range: Optional[Sequence[floa
 
 def image_shape_of(spec: Mapping[str, Any]) -> Optional[List[int]]:
     """``[height, width, channels]`` when the spec's input is an image."""
+    declared = spec.get("features")
+    if isinstance(declared, list) and declared and all(isinstance(item, Mapping) for item in declared):
+        # A general model graph: one picture and nothing else.
+        only = declared[0] if len(declared) == 1 else {}
+        if str(only.get("type") or "") == "image" and only.get("height") and only.get("width") and only.get("channels"):
+            return [int(only["height"]), int(only["width"]), int(only["channels"])]
+        return None
     layers = list(spec.get("layers") or [])
     first = layers[0] if layers else {}
     shape = first.get("shape") if str(first.get("type") or "") == "input" else None

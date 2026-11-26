@@ -1791,6 +1791,27 @@ def _counts_an_svcs_margin(estimator: Any, depth: int = 0) -> bool:
     return depth < _MAX_PART_DEPTH and any(_counts_an_svcs_margin(part, depth + 1) for part in _parts_of(estimator))
 
 
+def predicts_by_its_margin(estimator: Any, depth: int = 0) -> bool:
+    """Whether ``predict`` goes by an SVC's margin, not by the probabilities ``predict_proba`` gives.
+
+    An SVC or NuSVC with ``probability=True`` fits its probabilities apart from its margin, so on some rows its
+    ``predict`` picks another class than the most probable one (scikit-learn documents this). The same holds for a
+    one-vs-rest or a hard vote of such models, and for a pipeline or a search that ends in one. A soft vote, a bag
+    or a calibration of them predicts by probabilities, so it does not.
+    """
+    classes = _classes_of(estimator)
+    if classes & {"SVC", "NuSVC"}:
+        return callable(_safe(estimator, "predict_proba"))
+    if "OneVsRestClassifier" in classes or ("VotingClassifier" in classes and _safe(estimator, "voting") == "hard"):
+        return any(_holds_an_svc_with_probabilities(part) for part in _parts_of(estimator))
+    if depth >= _MAX_PART_DEPTH:
+        return False
+    steps = _safe(estimator, "steps")
+    last = steps[-1] if isinstance(steps, (list, tuple)) and steps else None
+    inner = last[-1] if isinstance(last, (list, tuple)) and last else _safe(estimator, "best_estimator_")
+    return inner is not None and predicts_by_its_margin(inner, depth + 1)
+
+
 def _library_of(klass: type) -> str:
     return str(klass.__module__).split(".")[0]
 
@@ -1895,7 +1916,9 @@ def _network_output(estimator: Any, rows: Any) -> Optional[Any]:
         if _from_library(estimator, "torch") and not _from_library(estimator, "keras"):
             import torch
 
-            training = bool(getattr(estimator, "training", False))
+            # Each part gets its own flag back, not the top's: train(flag) would set one for all of them, and a
+            # frozen part (a backbone whose batch normalization must not learn) would be put back into training.
+            modes = [(part, bool(part.training)) for part in estimator.modules()]
             estimator.eval()
             try:
                 weight = next(estimator.parameters(), None)
@@ -1903,7 +1926,8 @@ def _network_output(estimator: Any, rows: Any) -> Optional[Any]:
                 with torch.no_grad():
                     output = estimator(torch.as_tensor(rows, **{"dtype": torch.float32, **kind}))
             finally:
-                estimator.train(training)
+                for part, training in modes:
+                    part.training = training
         else:
             output = estimator(rows.astype(np.float32), training=False)
         output = output.detach().cpu().numpy() if hasattr(output, "detach") else np.asarray(output)

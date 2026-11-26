@@ -1,5 +1,417 @@
 # Changelog
 
+## 0.12.0 — 2026-11-25
+
+What is new needs Kaimei API 1.3.0, which adds model graphs (structures of `family: "graph"`), tensors of whole
+numbers, tokenizers, generation and agents: deploy the API first. The calls 0.11.0 had work as they did, against
+API 1.1.0 or 1.2.0, with these differences:
+
+- With `onnx` installed (and `skl2onnx`, for scikit-learn), `via="auto"` reads a model Kaimei's own readers refuse
+  or only draw, and a PyTorch module they cannot call, as a graph, which those APIs refuse. Nothing is made on
+  the API: `models.upload` then uploads the model as Kaimei's own readers read it, as 0.11.0 did (refused, or
+  drawn and not run), with a warning that API 1.3.0 runs it. `via="onnx"`, an ONNX model given directly,
+  `models.upload_structure`, and an upload described with `inputs`, `output`, `tokenizer` or `mask_layout` (which
+  only a graph is read with) raise an error that names API 1.3.0 instead. So does an upload whose task, feature
+  types or agent those APIs do not know, where the API's own validation error would have been raised.
+- `upload_tensors` sends an array of whole numbers or flags in its own type (`i64`, `bool` and the like), which
+  those APIs refuse with an error that names API 1.3.0. `dtype="f32"` sends it as 0.11.0 did.
+- `on_unsupported="error"` refuses every reading Kaimei would only draw, on every route: also a network whose
+  reading does not give the model's own outputs (a module that branches on its input, say), a classifier whose
+  class Kaimei would report differently from its own `predict()`, and a summary of feature importances, which
+  0.11.0 returned. `weights="summary"` is not refused for it. `models.upload(on_unsupported="error")` also refuses
+  a model the API says it only draws: it deletes the model again before raising, and says so.
+- Reading a PyTorch module with Kaimei's own readers (`via="auto"` or `"native"`) leaves each of its parts in its
+  own training mode. 0.11.0 left the module in eval mode.
+- With `weights="summary"`, the upload's warning says that no weights were sent and that an agent can run the
+  model; it said the model was stored as a sketch or feature-importance summary.
+
+### Added
+
+- **Kaimei works out what a model is.** The task from `labels=`, a single sigmoid, or a Hugging Face model's class and
+  config (classifiers with their `id2label`, multi-label ones, language models, encoder-decoders, segmenters,
+  detectors, pooled encoders as embeddings); every input a feature of its own (texts with their masks by name, ids as
+  integer columns ranged by their embedding tables, single numbers as columns, long runs and recordings as tensors or
+  `audio`); a Hugging Face language model's cache turned off for its export; a diffusers pipeline's scheduler as its
+  `sampler`. An example input the features cannot give back is refused (`param="inputs"`), and so are labels of the
+  wrong count on the ONNX route. A scikit-learn classifier fitted on a table of yes-or-no answers (a
+  `OneVsRestClassifier`, an `MLPClassifier`, a `RidgeClassifier`, alone or at the end of a pipeline) is a
+  `multilabel_classification`, each label's probability as the model gives it (a ridge classifier's scores each
+  through a sigmoid); a classifier with several outputs of its own (a `MultiOutputClassifier`, a forest or a k-NN
+  whose `classes_` is a list) is refused with that reason. A `task=` that contradicts the model
+  (`"multiclass_classification"` for a multi-label classifier) is refused on every route, saying what to pass.
+- **More frameworks.** TensorFlow SavedModels and `.tflite` files (tf2onnx), JAX and Flax NNX (jax2onnx), `.gguf` files
+  (opened by transformers), and Keras 3 models with recurrent layers (through `tf.function`). A JAX model is
+  converted for one row, whatever the number of rows of `sample`, and a Keras model with several outputs is checked
+  on the output `output=` picks.
+- **Pipelines read exactly.** scikit-learn bag-of-words text pipelines, and pipelines that start with a
+  `ColumnTransformer` (or an encoder straight into the model), are read with their preprocessing as part of the
+  model, so the features are the text or the table's own columns.
+  - **Bag of words.** `TfidfVectorizer`, or `CountVectorizer` and `TfidfTransformer`, then a model: a linear model
+    or a naive Bayes is scored with its own coefficients, and any other model after the counts (a forest, an SVM,
+    a linear `SVC`, a model made sparse with `sparsify()`), with steps between the counts and it (`TruncatedSVD`,
+    `SelectKBest`, a scaler), is converted by `skl2onnx`, joined on and checked. `use_idf=False`, sub-linear
+    scaling, norms, bigrams with stop words and a vocabulary of your own are followed. Texts (`X=`) may be a list,
+    a pandas Series, a NumPy array or a table of one column, and are in the check as you wrote them.
+  - **A bag of words is never read for the start of a text.** It counts every word, so the pipeline is read for
+    4,096 tokens (`text_pipelines.DEFAULT_TEXT_TOKENS`), or twice the longest text given up to the API's 32,768, or
+    `max_length=`, and its feature says `"longer": "refuse"`: Kaimei API 1.3.0 refuses a longer text with an error
+    instead of cutting it. The summary says so.
+  - **What is refused, with the reason:** a vectorizer with `strip_accents="ascii"` (it also deletes every
+    character that is not ASCII, which Kaimei's word tokenizer keeps; refit with `"unicode"`), a character
+    analyzer, a token pattern other than scikit-learn's default, a `HashingVectorizer` (it keeps no vocabulary), a
+    vocabulary word longer than 256 characters, a pipeline whose last step is not a model, and any pipeline whose
+    words Kaimei's tokenizer would find differently from the vectorizer on your texts and Kaimei's sample texts.
+  - **Tables.** A `ColumnTransformer` of one-hot or ordinal encoders, scalers and `SimpleImputer`s, each kind of
+    column in a `Pipeline` of its own or not, in front of any model the ONNX route reads. A column an encoder reads
+    becomes a `categorical` feature with the encoder's categories (numbers and flags named by their text, `"3"`,
+    `"True"`); infrequent categories (`min_frequency`, `max_categories`) and `drop` come out as scikit-learn groups
+    and drops them. Columns may be chosen by name, position, a boolean mask or a slice. A missing value is sent as
+    `null`: the model is given what the imputer fills in, the feature's `baseline`. Transformer weights,
+    `MinMaxScaler(clip=True)`, scalers after an encoder and a transformer as the remainder are followed. A part
+    Kaimei does not write down (`KBinsDiscretizer`, `PolynomialFeatures`, a `FunctionTransformer` of your own) is
+    refused by name when columns are chosen by name, and converted whole by `skl2onnx` when they are chosen by
+    position, as is a column read by two parts or `SimpleImputer(add_indicator=True)`.
+  - **Numbers far from zero.** The columns are computed in double precision, as scikit-learn computes them, the
+    pipeline is asked about your rows as the doubles they are, and made-up rows of the check are drawn from the
+    range of the fitted data. The model after the columns is read in single precision only when that gives the
+    pipeline's numbers on those rows, else in double (`metadata.model_precision`).
+  - `feature_names=` names the columns of a pipeline fitted on an array (one name for each column of the array). Its
+    structure says which column each feature is read from (`metadata.table_columns`), and `models.upload` stores
+    reference rows from an array under the right features.
+- **Tasks:** `multilabel_classification`, `object_detection` (`output={"boxes", "scores", ...}`), `segmentation`,
+  `clustering` and `sequence_to_sequence`. `upload(sampler=...)`; `generate(seeds=..., draw=...)`.
+- **A segmentation model's class axis is read off its graph.** The scores are followed back from the output to the
+  step that makes the classes (a convolution's channels, a linear layer's last axis) through every step that keeps
+  the axis where it is or moves it knowably: anything worked out value by value (a log-softmax, a skip sum, a
+  scale, a clip), a resize, a pad, a crop, a transpose, a squeeze, an unsqueeze, and a reshape that leaves the axis
+  whole. An argmax anywhere on the way makes the output class numbers, whatever follows it (a cast). When no step
+  says, the labels do (the one axis as long as `labels`), and then the shape (of the three axes after the row axis,
+  the one whose size differs from two equal others). Only an output none of these settles is refused, saying to
+  pass `mask_layout="chw"` (class scores, then height and width), `"hwc"` (height, width, then class scores) or
+  `"indices"` (a class number for each pixel), a new argument of `models.upload`, `models.upload_structure` and
+  `extract_structure`. An output whose classes the graph puts where no mask keeps them (between the height and the
+  width, or folded into another axis by a reshape that is not undone) is refused with that reason. A model with
+  several outputs is read without `output=`: of the outputs that can hold a mask, the one whose height and width
+  are the input picture's comes first, then one at a whole fraction or multiple of it, then the rest; among equals,
+  floats come before whole numbers, then the file's order (torchvision's FCN and DeepLab give `out` and `aux`; the
+  scores of each class for each of a hundred queries are not taken for the mask because they come first; a
+  fraction of the picture is the same fraction down and across, so a hundred boxes are not taken for one either).
+  A conversion from Keras, a TensorFlow file or JAX, which compares the library's own answer, reads the first
+  output that can hold a mask. One class picked out of several with its axis dropped (a slice or a split to one
+  class and a squeeze, or a `Gather` of one place, `x[:, 1]`) is one score for each pixel, read `chw`: its
+  probability is cut at one half, and its raw score, which says nothing of where that class beats the others, is
+  refused naming `threshold` and read where `threshold=` says. A height and a width of floats that no step explains is
+  never taken for class numbers because one row's values are whole: every check row is asked, and floats that are
+  whole on all of them are refused, naming `mask_layout`.
+- **A segmentation of one score for each pixel is cut where the model's own probability is one half.** A model
+  that ends in a sigmoid gives probabilities, cut at 0.5; one that gives raw scores (no sigmoid in the file, as
+  most U-Nets are exported) is cut at 0, which is where a sigmoid would make them one half. Kaimei reads which it
+  is off the graph: back from the output through the steps that only move scores (a resize, a transpose, a
+  squeeze, a slice, a pooling), a sigmoid or a softmax means probabilities, and a convolution, a linear layer, a
+  normalisation or a sum of those means raw scores; after any other step the model's own values on its check rows
+  say. The structure's head carries the cut (`head.threshold`) and what the scores were taken for
+  (`head.score_kind`), and the model's summary on Kaimei says it. The same scores give the same mask in every form
+  a file writes them (`1 x 1 x H x W`, `1 x H x W`, `H x W x 1` and `H x W`), a score exactly at the cut being the
+  foreground; a height and a width of whole numbers is a class number for each pixel. The scores of a model that ends
+  in `squeeze(0)` as PyTorch writes it when the rows are left open are followed through that branch, so `C x H x W`
+  and `H x W x C` outputs of pictures that are not square are read. Scores that are never negative and go above 1
+  are neither raw scores nor probabilities, and the model is refused, naming `threshold`, with the range seen; a
+  final product or quotient with a constant above nought moves the cut with it (a sigmoid times 255 is cut at
+  127.5, with no `score_kind`). A constant added before a clip or a scale (a hard sigmoid written out,
+  `relu6(x + 3) / 6`) leaves the cut to the model's own values. One column picked from a two-class classifier of
+  an ONNX file is read as a margin only where the classifier gives margins (a linear model or a support vector
+  machine without probabilities of its own); a column that is already a probability is read as the number it is.
+- `threshold=` on `models.upload`, `models.upload_structure`, `extract_structure`, `graphs.from_onnx` and
+  `graphs.via_onnx` (and `kaimei.onnx_graph.import_onnx`) says where the one score for each pixel of a segmentation
+  is cut, in the model's own numbers: a pixel is the foreground at that score or more. Left out, it is found from the
+  model, as above. It is refused, with `param="threshold"`, for a mask of several classes or of class numbers, for
+  any other task, and when it is not a finite number (it settles a height and a width of whole-valued floats as
+  one score for each pixel); `via="native"` refuses it as it refuses every argument only a
+  conversion reads. It is the mask's `head.threshold`, not a classifier's: the class threshold a yes-or-no model is
+  registered with stays `outputs={"threshold": ...}`.
+- `task="segmentation"` and `task="object_detection"` send a PyTorch or Keras model through the conversion on
+  `via="auto"`, with `input_shape` alone as with a `sample`: Kaimei's own readers read class scores and numbers,
+  and a mask or boxes is read by a head only the conversion writes. `via="native"` refuses such a task, naming it.
+- **Examples for text and image models** are in `examples/`: a scikit-learn text classifier
+  (`text_sentiment.py`) and a small PyTorch segmenter (`image_segmentation.py`), each as a script and a
+  notebook, from training to an upload, a prediction and an explanation or a mask.
+- **Plans.** The Kaimei API limits by plan how many models your own agent runs and how many numbers one model
+  graph keeps on Kaimei (`403 quota_exceeded`); every plan has every feature. `weights="summary"` sends a
+  model's tensors as shapes, which are not counted.
+- **The ONNX route, made stricter.** A model that draws at random, at its top level, in a branch or a loop or in a
+  function the file defines, is checked against its seeded reading, not the unseeded original, so it is run, not
+  drawn; its structure says what the check compares (`metadata["compared_with_original"]` is `false`, and
+  `checked_against` ends ", with fixed seeds"). A NumPy sample is given to a PyTorch module in the module's own float
+  type, on its device, and so are the numbers `preprocess=` normalizes with; converting a module leaves torch's
+  random generators as they were. `on_unsupported="error"` refuses a graph that would only be drawn, and an upload
+  the API says it only draws. On every route, a wrong `sample`, `inputs`, `output`, `tokenizer`, `labels` or
+  `max_length` is an error that names the argument (`StructureError.param`), not a quiet fallback: a sample the
+  model cannot be called with, an `inputs=` name the model does not have, a picture layout for an input that is not
+  a picture, an output it does not give, a tokenizer for a model that takes no token ids, labels that are not a
+  list of names (a classifier that gives one value for a row needs two, negative then positive), `feature_names`
+  that do not fit the model on the conversion route. `inputs`, `tokenizer`, `mask_layout` and an `output` other
+  than a module's first are read only from a model converted to ONNX: with any of
+  them `via="auto"` converts the model first and refuses it when the conversion cannot be used, and `via="native"`
+  refuses them. A conversion is never checked against itself: when nothing says which of a file's outputs is the
+  library's answer, the reading is drawn. A scikit-learn tree fitted on rows with missing values, which `skl2onnx`
+  never returns from converting, is refused before conversion wherever it sits in the model (inside a calibration,
+  behind a target transform, in a stack or a vote); Kaimei's own readers read such trees. A Keras model that is not
+  a table or a picture goes through ONNX instead of being refused for want of `feature_names` (without `tf2onnx`,
+  or when its conversion cannot be used, it is uploaded as Kaimei's own readers draw it, as 0.11.0 uploaded it, with
+  a warning that says why), and the warning for a model that is drawn gives the conversion's own reason, and what
+  to pass.
+- **Any model, through ONNX.** A model Kaimei has no reader of its own for (a recurrent network, a transformer, a
+  model with several inputs, most scikit-learn estimators) is converted to ONNX in memory, on your machine, and
+  uploaded as a graph of ONNX operators that the API runs. `models.upload`, `models.upload_structure` and
+  `extract_structure` take `via="auto" | "native" | "onnx"` to pick the route, `sample=` (an example input),
+  `inputs=` (what an input is), `output=` (which output is the prediction) and `labels=`. An ONNX model itself
+  (a `.onnx` path, its bytes or an `onnx.ModelProto`) can be given in place of the estimator, and is read as a
+  graph whatever `via` says; one that defines its own functions is read too (they are expanded with
+  `onnx.inliner`, and an `onnx` package too old to have it is refused, saying to install a newer one). `task` may
+  also be `text_generation`, `generation` or `embedding`. `labels=` takes a list, a tuple, a NumPy array or a pandas
+  Index (`labels=encoder.classes_`) or a generator, which is read once and kept; `inputs=` names inputs of the model as converted (for a module whose `forward`
+  takes more values than it names, `input_0`, `input_1`, ...); and `sample=` for a scikit-learn pipeline whose
+  `ColumnTransformer` picks its columns by name is a table that holds those columns. `upload(model, X=frame)` with a
+  frame of another width than the model was fitted on says so of `X` (`param="X"`), not of a `feature_names` the
+  caller never gave.
+- **An encoder-decoder kept as an ONNX file is read with its decoder's input hinted `{"generated": True}`.**
+  `from_onnx(file, inputs={"decoder_input_ids": {"generated": True}})` (and `import_onnx`) writes a feature of token
+  ids marked `generated` with the decoder's first token as its `baseline`, the input bound to that feature's ids
+  (`{"feature": "decoder", "part": "ids", "pad_id": 0}`), the structure's `decoder` (`feature`, `start_token`,
+  `eos_token`, `pad_token`, `max_length`), and the task `sequence_to_sequence`. The hint may also say `feature` (the
+  feature's name, `decoder` by default), `pad_id` (what fills the input after the last token written, 0 by default;
+  `None` is the same as leaving it out), `start_token` (the first id of the input's sample when one is given, else
+  the padding token) and `eos_token`. The decoder's mask, positions or length that come with the ids by name
+  (`decoder_attention_mask` beside `decoder_input_ids`) are bound to the same feature unless they have a hint of
+  their own. A hint that cannot be written that way is refused, naming `inputs`: an input that does not hold whole
+  numbers, two inputs marked generated, a task other than `sequence_to_sequence`, a hint that also says `value`,
+  `zeros`, `features`, `layout` or a `part` other than `ids`, a `pad_id`, `start_token` or `eos_token` that is not a
+  token id, a `feature` that is not a name or that another input reads, a sample that starts with something that is
+  not a token id, and an input the model's output does not depend on. The importer's own check holds the model's
+  scores at the last token the decoder's feature has in each row, which is where the API reads them.
+- A classical classifier written without a ZipMap is read as its ZipMap file is: its classes are found behind a
+  cast, in `classlabels_ints`, in the one column of a two-class linear SVM, and in the table a plain-step model's
+  own label is looked up in at the argmax of its scores.
+- Kernel models (SVC, SVR, NuSVC, and the wrappers around them) uploaded without rows are placed by their support
+  vectors: far from zero they are read in double precision, or drawn when the converted model does not give the
+  model's numbers there (ONNX keeps support vectors in single precision), and not called exact.
+- **A classifier is exact only when its class is the model's own.** Besides its scores, the class Kaimei reports for
+  a row is compared with the model's own `predict` on every row of the check, by the rule the API reports a class
+  with. Where they differ, the reading that agrees is used: a `TunedThresholdClassifierCV` or
+  `FixedThresholdClassifier` is uploaded with its own decision threshold (`outputs.threshold`, in the units Kaimei
+  reports, and `outputs.positive_label` when its positive class is the first one), and a classifier whose `predict`
+  goes by its scores where its probabilities tie (`SGDClassifier(loss="modified_huber")` of three classes or more,
+  one-vs-rest wrappers of it) is read by its `decision_function`. When no reading agrees on every row, the model is
+  uploaded drawn, not run, and its summary says on how many rows the class differs and why
+  (`on_unsupported="error"` refuses it). Kaimei's own readers answer to the same rule, and so do scikit-learn
+  pipelines and an ONNX file that gives its own label beside its probabilities. A model's own threshold
+  (`TunedThresholdClassifierCV`, `FixedThresholdClassifier`) travels in its structure, and the API registers it
+  under the model's own class names. `models.upload` sends in `outputs` only what the caller said, and
+  `models.upload_structure` does not write a threshold to the model; both read the registered decision back and
+  warn when it is not the model's own, naming the `client.models.update(...)` call that registers it. A
+  `threshold` or `positive_label` passed in `outputs=` is the caller's own decision: it replaces the model's, is
+  sent as it is, and warns with the number of checked rows on which it gives another class than `predict`. A
+  decision registered by the customer is kept; a structure uploaded to an existing model changes the registered
+  decision only when it was the default or the previous structure's.
+- **An SVC or NuSVC says how its class is chosen.** With `probability=True` it is read by its probabilities when the
+  most probable class of `predict_proba` is the class `predict()` gives on every row of the check; scikit-learn
+  documents that the two can differ on other rows, so the upload warns and the structure says so in
+  `metadata["predicted_class"]`. Where a check row disagrees, it is read by its `decision_function` instead, whose
+  class is the model's own, and runs: on its own, behind a one-vs-rest wrapper and behind a table pipeline. Of more
+  than two classes and read by its scores, Kaimei's class is the highest one-vs-rest score, where `predict()` counts
+  one-vs-one votes and can differ where votes tie: the note and the warning say so, a model whose check holds a
+  tie its scores settle another way is drawn, not run, and `break_ties=True` on the model makes the two agree. With
+  `decision_function_shape="ovo"` and more than two classes its scores are for pairs of classes, not classes: it is
+  refused, saying to set `decision_function_shape="ovr"` (which needs no refit).
+- **A scikit-learn model read through ONNX is computed in the precision that gives its numbers.** Its check holds
+  your rows as the doubles they are, and rows made up where the model's data lies (its first scaler's statistics,
+  your rows, the points a nearest-neighbours or naive Bayes model keeps), not around zero. Single precision is kept
+  only when it gives the model's numbers on those rows; otherwise the graph is in double precision
+  (`metadata.model_precision`). Where nothing says where a column's values lie, a model that tells doubles apart is
+  computed in doubles (a tree is not: scikit-learn rounds a tree's inputs itself), and the summary says to give
+  rows of the table.
+- The conversion is made by the framework's own converter: `torch.onnx.export` for a `torch.nn.Module`,
+  `skl2onnx` for a scikit-learn estimator or pipeline, `tf2onnx` for Keras (the Keras route was not run for this
+  release: TensorFlow was not installed where it was tested). `pip install "kaimei[onnx]"` installs `onnx`.
+- The rows sent with a graph for the API to check itself on hold the outputs of the original library, not of
+  the conversion. A conversion that differs from the library by more than 1e-4 of its outputs' size is marked
+  `approximate`: drawn, not run. The conversion is compared on ONNX's own evaluator when ONNX Runtime has no kernel
+  for one of its steps (a double-precision LSTM), and only then.
+- **Text.** `tokenizer=` makes a token input a text feature. A Kaimei description (`char`, `word`, `wordpiece`,
+  `bpe`), a Hugging Face WordPiece tokenizer (BERT) and a byte-level BPE tokenizer (GPT-2, RoBERTa) are written
+  down as JSON and compared with the original on the sample texts of `kaimei.text.SAMPLE_TEXTS`:
+  `kaimei.text.tokenizer_spec`. Any other
+  tokenizer (SentencePiece, tiktoken, your own), and one that fails the comparison, is uploaded as its vocabulary
+  alone (`"type": "pieces"`), with a warning: Kaimei names its tokens, and text is split by the model's agent.
+- Special and added tokens written in a text (`[SEP]`, `<|endoftext|>`, tokens added to a tokenizer) are matched
+  as Hugging Face matches them, and `_` and a final sigma are split and lowercased as Hugging Face does. These
+  cases are among the sample texts the comparison uses, so a tokenizer that still differs on them is uploaded as
+  `pieces`, with a warning. So are runs of 260 to 400 bytes with no break (Chinese and Japanese without
+  punctuation, a long word, a long number, a run of symbols).
+- **Words of any length are split as Hugging Face splits them.** Byte-pair merges are made as Hugging Face makes
+  them, one at a time, lowest rank and leftmost first (a merge listed twice takes the rank of its last listing), so
+  a run of more than 256 bytes with no break is split as the original splits it. Hugging Face's BPE options are
+  followed: a character the vocabulary lacks is left out before merging, or is the unknown token (one for a run of
+  them with `fuse_unk`), or its bytes with `byte_fallback`, and `ignore_merges` takes a word the vocabulary holds
+  whole. A token added with `add_tokens` that a WordPiece vocabulary does not hold is only matched whole in a
+  text, never as a piece of a word, and a tokenizer whose `max_input_chars_per_word` is above 256 splits longer
+  words as it says. Tokenizers with these options are run by Kaimei, not uploaded as `pieces`. A tokenizer with two
+  added tokens that are one text once normalized (`newtoken` and `NewToken` with an uncased normalizer) is
+  uploaded as `pieces`, with a warning: Hugging Face takes one or the other from one run to the next. A byte-pair
+  description whose merges name a piece its vocabulary lacks is refused when it is built, naming the piece, as
+  Hugging Face refuses it.
+- `max_length=` on `models.upload`, `models.upload_structure`, `extract_structure`, `graphs.via_onnx` and
+  `graphs.from_onnx`: how many tokens a model that reads text is uploaded for. A graph's shapes are fixed, so
+  without it the length of `sample` is the most tokens the model is ever given; a language model uploaded that
+  way warns, because its prompt and what it writes share them. `max_length=` and `output=` take any whole number,
+  NumPy's included.
+- `models.generate` runs a language model's loop (or a model that draws), `models.tokenize` splits text or names
+  token ids, `models.parameter_view` returns a picture of one tensor, and `models.agent_status` says whether a
+  model's agent is connected.
+- `models.generate(seeds=[...])` draws a model that answers in one pass once for each of up to 16 seeds, returned as
+  `variations`, and `draw=[...]` names tensor or sequence features to draw from the seed although they have a
+  baseline. `models.activations(channel_start=...)` sends the maps from that channel on, in their own order,
+  `channels` at a time: how every head of an attention layer is read. Each is sent only when given.
+- **Agents.** `kaimei.agent` runs a model where it lives: `serve(client, model, predict=...)` connects out to the
+  API, waits for work and answers it. `predict_with(estimator)` makes the function for a scikit-learn-style
+  estimator or a `torch.nn.Module`. With `module=` (PyTorch, forward hooks) or `onnx=` (the model's ONNX file,
+  run with ONNX Runtime; `providers=` picks a GPU) the agent also answers trace and activations requests for a
+  structure uploaded with `weights="summary"`. With `tokenizer=` it splits text for a model whose tokenizer
+  Kaimei cannot run. From a shell: `python -m kaimei.agent --model ... --predict package.module:function`, or
+  `--onnx model.onnx`. An agent answers an activations request the way the API does: the maps of a stage
+  strongest first, or in their own order from `channel_start` (how the heads of an attention layer are asked
+  for), up to 64 of them, and the heads of an attention layer ranked by their `focus`.
+- An agent given an ONNX file, for a model with no structure on Kaimei, reads the prediction where the importer
+  does: the first output of floats, and what a scikit-learn classifier gives beside its class (its probabilities,
+  or its scores) in the tensor its `ZipMap` is made from, never its class label. A file none of whose outputs
+  holds scores is refused, saying so. A converted classifier's probabilities are sent as they are. One without
+  probabilities (an SVC, an `SGDClassifier`, a perceptron) gives scores, which are sent so that Kaimei reads from
+  them the class the model predicts: one margin for two classes (its `decision_function`, positive for its second
+  class), the scores for more, or the class itself where the scores do not give it (an SVC of three classes or more
+  decides by votes, which can tie). What a file's numbers are is read from the steps that made them (a softmax or
+  a sigmoid, a classifier's own transform, an SVC's probability model), not from its `ZipMap`.
+- **An agent sends what a model computes, never the model.** The structure that names a model's steps comes from
+  Kaimei, and an agent does not take its word for what a step is. A step is sent only where its values are
+  computed from the row: a weight, a constant, and what is worked out from those alone (or from an input's shape
+  alone, like the embedding of each position; or from an input that is given the same value for every row, like a
+  text's segment ids) are the model's own numbers and are left out, whatever step the structure says they are.
+  With `onnx=` that is read off the file's graph; with `module=` the run is followed one operation at a time
+  (PyTorch 1.13 or later; before that, what the modules' hooks can tell). A prediction is read the same way: an
+  output of a file that holds the model's own numbers is passed over for the first output of floats that is
+  computed from the row. A step's values are laid out only as its tensor is: the shape the structure gives must be
+  the tensor's own, and the order of its axes a true order of them. A step that is kept back is named, with the
+  reason, under `withheld` in the answer to a trace or an activations job (at most 64 of them), and once in the
+  agent's log; the job is answered all the same.
+  A tensor a PyTorch module keeps as a plain attribute (not a parameter, not a buffer; itself, or in a list, tuple or
+  dict that is the attribute) is the model's own from the start of every look, so a step that gives it, a part of
+  it, or something computed from it alone is withheld at every look and not only at the look that made it; what the
+  module is called with for the row is never taken for the model's own. A tensor kept deeper than that (in a module
+  that is not registered, in a closure or a global, or in another kind of object) is not recognised unless the run
+  computes it from parameters, buffers or such attributes, and before PyTorch 1.13 a tensor a module computes from
+  its weights while called with the input is sent at the look that makes it.
+- An agent started with the structure that was uploaded (`structure=`) goes by that structure: it says nothing of a
+  step it does not hold, reads a file's steps from the tensors it names, and reads the prediction where its own
+  head does, whichever step the structure on Kaimei points at.
+- An agent leaves a PyTorch module as it found it: each part in its own training mode (a frozen backbone stays
+  frozen), and no hook behind after a job that fails. `predict_with` gives a scikit-learn estimator fitted on
+  named columns each where it was fitted to find it, whatever order `feature_names` names them in. An agent
+  started with the uploaded structure feeds an input its fixed value; one a summary upload kept at home is refused
+  with what to do (`weights="full"`, or `inputs={name: lambda row: ...}`, the input named as the model file names
+  it). `Agent(inputs=...)` beside `structure=` feeds each input it names as it says and every other input as the
+  structure says; a name in `inputs=` that is not an input of the model's file is a `ValueError` when the agent is
+  made, which lists the inputs there are, and the structure's own name for one (`in.state`) is answered with the name
+  that was meant (`state`).
+- **An agent runs an encoder-decoder.** A `sequence_to_sequence` model's prediction is the scores of the next token,
+  read after the last token its decoder has written so far (the feature marked `generated`, which Kaimei sends with
+  every row and which starts as the decoder's first token). With `onnx=`, the inputs the file names for its decoder
+  (`decoder_input_ids`, `decoder_attention_mask`) read that feature without being told, and an agent started with
+  `structure=` feeds them the same way, also where the structure describes the input as `{"generated": true}`.
+  `POST /generate` then writes through the agent as it does on Kaimei. Without `structure=`, with several text
+  features (an encoder-decoder's two), whole-number inputs are bound by themselves only when `decoder` in a name
+  sends it to the feature marked `generated` and every other name to the one text given, and each text's token ids
+  are read by exactly one input (`input_ids`, `attention_mask`, `decoder_input_ids`, `decoder_attention_mask`);
+  any other naming (`src` and `tgt`, two inputs for one text, one input for two texts) is refused, saying to give
+  `inputs={...}`. A model whose only text feature is the one marked `generated` is bound whatever its input is
+  called. A model on Kaimei without such a feature is refused with the reason, for each job. With `module=`, give
+  `prepare=` a function from a row (`row["text"]`, `row["decoder"]`) to the module's arguments.
+- An ONNX file whose nodes list inputs left out at their end under empty names (an opset-20 `DFT`), at its top
+  level, in a branch, in a loop's body or in a function of its own, is read and run without them, which means the
+  same: ONNX Runtime 1.32 stops the process on some such nodes.
+- An agent says what its model's own output is (`"link"` in its answer), so a model with no structure on Kaimei
+  is not squashed twice: `"none"` for probabilities (a module or file that ends in a softmax or a sigmoid, a
+  converted classifier's probabilities, `predict_with` around `predict_proba`), `"softmax"` for a log-softmax. A
+  module is read with `torch.fx`, or by which of its modules gave the output; a file by the node that makes the
+  prediction; where neither says, by whether its rows are probabilities. Scores say nothing, and Kaimei reads
+  them through a softmax or a sigmoid.
+- A look inside a large model through `onnx=` reads its steps in several runs, and keeps a session of ONNX
+  Runtime for each so the next look makes none of them again, as `session_memory=` allows
+  (`Agent(session_memory=...)` in bytes, `python -m kaimei.agent --session-memory MIB`; 2 GiB unless said; a
+  session holds about three copies of the weights). A look larger than the memory makes again only the sessions
+  that do not fit, and the session that gives a prediction is always kept. Those sessions do without ONNX
+  Runtime's memory arena, so each keeps its weights and not what its last run took. A run reads at most 256 tensors
+  and 16,777,216 values (`kaimei.agent.FETCH_STEPS`, `FETCH_VALUES`), counted by what the file says each tensor
+  holds (its declared shape with the row's sizes, a shape asked for in a run of its own where the file does not
+  say, and what it was found to hold once read), never by the size the structure on Kaimei gives a step, and a
+  tensor that several steps name is read once. A run's values are made into the frames or stages that are sent and
+  let go before the next run, so a look inside a large model takes the memory of one run.
+- An answer larger than the API takes (4,000,000 values or 128 MiB of JSON) is not sent: the job fails, saying how
+  large it was. An answer the API refuses for any other reason than its job being gone, or that is lost on the
+  way, is followed by a short failure, so whoever asked is told why rather than waiting out the timeout. Nothing
+  a job does ends an agent: an answer that cannot be written as JSON is followed by a short failure too, a failure
+  that cannot be sent either is said in the log, and the agent goes on to the next job. A step's statistics are
+  numbers whatever its values: a length or a sum too large for a float is sent as the largest float there is.
+  What cannot be written as JSON is said for what it is: "Infinity can't be sent" only for a number that is not
+  finite; text that holds half of a surrogate pair is said to hold a character that cannot be written as UTF-8,
+  with the character and what comes just before it; a list or a dict that holds itself is said to.
+- `python -m kaimei.agent` stops on SIGTERM as on Ctrl+C and closes its session, so a stopped container leaves no
+  session for jobs to be queued to.
+- An agent holds a request for work open for less than the client's own timeout (7.5 seconds for
+  `Kaimei(timeout=10)`), and pauses to the end of a second after one that comes back empty sooner (`wait=0`). An
+  agent whose session the API has lost opens another at once the first time, and after a growing pause (1, 2, 4
+  seconds and so on, up to 30) when the new one is lost too.
+- `save_onnx=` on `models.upload` and `models.upload_structure` writes the converted ONNX model to a path, for
+  the model's agent to run. `Extraction.onnx` holds the same bytes, and `graphs.to_onnx` converts a model again.
+  The file is written only once the structure read from it is the model's: not when an older API refuses the
+  graph and the model is uploaded as Kaimei's own readers read it (the warning says no file was written), not when
+  `on_unsupported="error"` deletes the model, and not when `upload_structure` is refused. A path that cannot be
+  written (a folder that is not there) is refused before anything is uploaded, with `param="save_onnx"`; a file that
+  exists and can be written is accepted whatever its folder allows; a write
+  that fails after the upload is a warning that names the model, whose id is returned.
+- `weights="summary"` works for graphs, and sends what it always has: shapes and statistics, and no learned
+  number however few (a bias, a class's mean, a converted classifier's coefficients). A graph keeps only the
+  whole numbers its shapes are worked out from (shapes, axes, indices), the scales of a resize, and its
+  operators' single settings (an epsilon, a slope). A float value an input is always given
+  (`inputs={name: {"value": array}}`) is sent as its shape too, and the reading is drawn. Statistics are
+  computed in pieces, without a double-precision copy of a tensor. The API no longer limits the size of a
+  tensor or the number of parameters of a model sent this way.
+- `weights="pictures"` is a summary that also sends a small picture of each float tensor of 256 values or more
+  (`view`: at most 64 by 64 cells, the strongest value of each block, at 8 bits), which the dashboard draws
+  where the weights would be. It is asked for, never the default: a tensor of 64 by 64 values or fewer is all
+  there in its picture. A tensor is pictured as a matrix, its first axis down and the rest across, with leading
+  axes of one left out (a recurrent layer's `(1, 4 × units, inputs)` weights are `4 × units` rows), as the API
+  draws one it holds.
+- Binary tensors upload in their own number type (`f16`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`,
+  `bool`); `upload_tensors(dtype=...)` still sets one for all.
+
+### Changed
+
+- `pip install "kaimei[onnx]"` also installs `onnxscript` (0.7.2 or later), which PyTorch's newer exporter needs:
+  Hugging Face language models and encoders only convert through it. It needs `onnx` 1.17 or later, which the
+  extra now asks for.
+- Estimators that were refused (`SVC` with a non-linear kernel, k-nearest neighbours, naive Bayes,
+  `IsolationForest`, pipelines with `PCA` or `PolynomialFeatures`) and ones that were drawn (`SVC` and `NuSVC`
+  with `probability=True`) are uploaded through ONNX and run, when `skl2onnx` is installed (such an SVC says how
+  the class Kaimei gives a row is chosen: see "An SVC or NuSVC says how its class is chosen" above). Without it they
+  are refused or drawn as before, and the error says what to install. `via="native"` keeps the old behaviour.
+- A PyTorch module the native reader could only draw (attention, exact GELU, a reshape) is converted through
+  ONNX when `onnx` is installed. One it could not call (token ids, several inputs) is converted first.
+- Reference rows (`X=`) are stored for tables and images. For a model that reads text, a series or a tensor
+  they are left out, with a warning.
+- `predict_with` answers for a classifier without `predict_proba` with its `decision_function`, marked as the
+  model's own scores, where it used to answer with class labels.
+- Three modules are copies of the API's, kept byte for byte: `kaimei/onnx_reader.py`, `kaimei/onnx_graph.py`
+  and `kaimei/tokenizers.py`.
+
 ## 0.11.0 — 2026-11-25
 
 Needs Kaimei API 1.2.0 for `organizations.confirm_join_domain`. Against 1.1.0, everything 0.10.0 did works as
