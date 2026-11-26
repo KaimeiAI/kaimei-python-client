@@ -46,16 +46,25 @@ class Organization(Resource):
 
     def join_domain(self) -> APIObject:
         """Whether anyone with an address at this organization's email domain may join it, and as what.
-        ``problem`` says why you could not turn it on right now."""
+        ``problem`` says why you could not turn it on right now. With Kaimei API 1.2.0 or newer, ``pending``
+        describes a link asked for and not opened yet (where it went, when it expires, ``email_sent``)."""
         return self._get("/v1/organization/join-domain")
 
     def enable_join_domain(self, *, role: str = "member") -> APIObject:
         """Let anyone with an address at your own email domain join as ``member`` or ``viewer``, once they confirm
-        that address by an emailed link. When it is on already, this changes the role. Owners and admins, on Team."""
+        that address by an emailed link. Owners and admins, on Team.
+
+        With Kaimei API 1.2.0 or newer this emails a link to your own address and turns nothing on yet:
+        ``enabled`` stays false and ``pending`` says where the link went. Open it, or pass its token to
+        ``organizations.confirm_join_domain``, signed in as the same account. The link works once, for 24 hours
+        (``pending.expires_at``); asking again replaces it. ``pending.email_sent`` is false when nothing could be
+        mailed (an API with no mail server writes the link to its log instead). When it is on already, this changes
+        the role at once."""
         return self._put("/v1/organization/join-domain", {"role": role})
 
     def disable_join_domain(self) -> APIObject:
-        """Stop people joining by email domain. Links already mailed stop working; nobody is removed."""
+        """Stop people joining by email domain, or stop it turning on. Links already mailed stop working; nobody
+        is removed."""
         return self._delete("/v1/organization/join-domain")
 
     # --- invitations ---

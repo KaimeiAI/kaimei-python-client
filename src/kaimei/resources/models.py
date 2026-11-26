@@ -554,6 +554,10 @@ class Models(Resource):
 
         ``project`` puts it in one of the destination's projects. Needs a session (``auth.login``) with an
         owner or admin role where the model is now. The result lists the models as they are in the destination.
+        With Kaimei API 1.2.0 or newer, credentials saved for the model's own endpoint (its headers, and any in
+        its URL) are removed, not moved (``credentials_removed`` lists the models that need them saved again), and
+        the destination needs room on its plan for this month's predictions, explanations and analyses that come
+        along.
         """
         return self._post(
             f"/v1/models/{model}/transfer",
@@ -574,7 +578,8 @@ class Models(Resource):
 
         The copy holds the model's settings, versions, structure, weights and reference data. Predictions,
         explanations, analyses and insights stay with the original. Credentials for the model's own
-        endpoint are not copied: ``credentials_removed`` lists the copies that need them saved again.
+        endpoint (its headers, and with Kaimei API 1.2.0 any in its URL) are not copied: ``credentials_removed``
+        lists the copies that need them saved again.
         Needs a session (``auth.login``).
         """
         return self._post(

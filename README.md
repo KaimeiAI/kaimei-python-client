@@ -343,7 +343,7 @@ for model in client.models.iterate():
     print(model.slug)
 ```
 
-Dashboard sign-in (session token) is also supported via `client.auth.login(...)` / `client.auth.signup(...)`. Production sign-up needs a Cloudflare Turnstile token (`turnstile_token=...`). Prefer creating API keys in the dashboard.
+Dashboard sign-in (session token) is also supported via `client.auth.login(...)` / `client.auth.signup(...)`. Production sign-up needs a Cloudflare Turnstile token (`turnstile_token=...`), and every sign-up needs `accept_terms=True` once the person has agreed to the [Terms of Use](https://kaimei.ai/terms). Prefer creating API keys in the dashboard.
 
 ## Resources
 
@@ -357,6 +357,8 @@ Dashboard sign-in (session token) is also supported via `client.auth.login(...)`
 | `client.auth` | `/v1/auth` |
 | `client.api_keys` | `/v1/api-keys` |
 | `client.organization` | `/v1/organization` |
+| `client.organizations` | `/v1/organizations` (your organizations, joining by domain, `join-domain/confirm`) |
+| `client.invitations` | `/v1/invitations` (invitations sent to you) |
 | `client.projects` | `/v1/projects` (`include="summary"`, `overview(project)`) |
 | `client.health()` | `/health` |
 

@@ -38,7 +38,8 @@ class Projects(Resource):
     def transfer(self, project: str, *, organization: str) -> APIObject:
         """Move a project and the models in it, with their history, to another organization you belong to.
 
-        Needs a session (``auth.login``) with an owner or admin role where the project is now.
+        Needs a session (``auth.login``) with an owner or admin role where the project is now. The rules are those
+        of ``models.transfer``.
         """
         return self._post(f"/v1/projects/{project}/transfer", {"organization": organization})
 

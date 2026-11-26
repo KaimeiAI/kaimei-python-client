@@ -32,6 +32,12 @@ class Organizations(Resource):
         """Join with the token from the emailed link. Returns the organization; ``auth.switch`` to work in it."""
         return self._post("/v1/organizations/join/confirm", {"token": token})
 
+    def confirm_join_domain(self, token: str) -> APIObject:
+        """Turn joining by email domain on, with the token from the link ``organization.enable_join_domain``
+        emailed you. Signed in as the account that asked, and still an owner or admin there; the client can be
+        working in any organization. Returns that organization's setting. Needs Kaimei API 1.2.0 or newer."""
+        return self._post("/v1/organizations/join-domain/confirm", {"token": token})
+
 
 class Invitations(Resource):
     """Invitations sent to the signed-in account. Sending them is ``organization.invite``."""
