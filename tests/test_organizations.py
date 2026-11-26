@@ -112,6 +112,32 @@ def test_joining_by_email_domain() -> None:
     assert seen[-1][:3] == ("POST", "/v1/organizations/org_team/join", None)
     client.organizations.confirm_join("tok")
     assert seen[-1][:3] == ("POST", "/v1/organizations/join/confirm", {"token": "tok"})
+    client.organizations.confirm_join_domain("claim-tok")
+    assert seen[-1][:3] == ("POST", "/v1/organizations/join-domain/confirm", {"token": "claim-tok"})
+
+
+def test_turning_joining_on_waits_for_the_link_and_confirming_returns_the_setting() -> None:
+    """The 1.2.0 contract: asking answers ``enabled`` false with ``pending``; the link's token turns it on."""
+    pending = {"email": "ada@acme.com", "domain": "acme.com", "role": "member", "email_sent": True}
+    asked = {"object": "join_domain", "enabled": False, "organization_id": "org_team", "pending": pending}
+    on = {"object": "join_domain", "enabled": True, "domain": "acme.com", "role": "member", "pending": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/organization/join-domain" and request.method == "PUT":
+            return httpx.Response(200, json=asked)
+        if request.url.path == "/v1/organizations/join-domain/confirm":
+            assert json.loads(request.content) == {"token": "claim-tok"}
+            return httpx.Response(200, json=on)
+        return httpx.Response(404, json={"error": {"type": "not_found", "code": "not_found", "message": "no"}})
+
+    client = Kaimei(api_key="session", base_url="https://api.kaimei.ai")
+    client._transport._client = httpx.Client(
+        base_url="https://api.kaimei.ai", transport=httpx.MockTransport(handler), headers={"Accept": "application/json"}
+    )
+    waiting = client.organization.enable_join_domain()
+    assert waiting.enabled is False and waiting.pending.email == "ada@acme.com" and waiting.pending.email_sent is True
+    confirmed = client.organizations.confirm_join_domain("claim-tok")
+    assert confirmed.enabled is True and confirmed.domain == "acme.com" and confirmed.pending is None
 
 
 def test_answering_an_invitation_takes_a_token_or_an_id_and_not_both() -> None:

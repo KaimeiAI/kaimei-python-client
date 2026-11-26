@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.11.0 — 2026-11-25
+
+Needs Kaimei API 1.2.0 for `organizations.confirm_join_domain`. Against 1.1.0, everything 0.10.0 did works as
+before. Against 1.2.0 the calls are the same, and four answers change because the API changed them:
+`organization.enable_join_domain()` emails a link and turns nothing on until it is opened, a transfer drops
+endpoint credentials and can be refused with `403 quota_exceeded` for this month's usage, and `auth.signup`
+without `accept_terms=True` is refused with `400 terms_not_accepted`.
+
+### Added
+
+- `auth.signup(..., accept_terms=True)` says the person agreed to the Terms of Use, which Kaimei API 1.2.0 requires
+  to make an account and records with the Terms' version (`user.terms_version`, `user.terms_accepted_at`). Clients
+  0.10.0 and older cannot send it, so their `auth.signup` is refused by 1.2.0. `auth.reset_password(...,
+  accept_terms=True)` is for an account that was never confirmed, which the reset makes yours: 1.2.0 answers
+  `400 terms_not_accepted` until it is passed, and the same link works then.
+- `organizations.confirm_join_domain(token)` turns joining by email domain on with the token from the link the API
+  now emails the admin who asks. Needs Kaimei API 1.2.0, where `organization.enable_join_domain()`
+  emails that link and answers with `enabled` false and `pending` set, instead of turning it on at once.
+
+### Changed
+
+- The docstrings of `models.transfer` and `projects.transfer` say that, with Kaimei API 1.2.0, endpoint
+  credentials are removed rather than moved and the destination needs room for this month's usage. Nothing in the client
+  changes for either: both come back in the result or as `403 quota_exceeded`.
+
 ## 0.10.0 — 2026-11-21
 
 The new calls need Kaimei API 1.1.0. Everything 0.9.2 did works as before, against 1.0.0 or 1.1.0.

@@ -51,6 +51,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
     if path == "/v1/auth/signup":
         body = json.loads(request.content)
         assert "turnstile_token" in body
+        assert body["accept_terms"] is True
         return httpx.Response(201, json={"object": "session", "access_token": "jwt", "user": {"email": body["email"]}})
     return httpx.Response(404, json={"error": {"type": "not_found_error", "message": path}})
 
@@ -95,8 +96,8 @@ def test_transport_default() -> None:
     t.close()
 
 
-def test_version_is_080() -> None:
-    assert __version__ == "0.10.0"
+def test_version() -> None:
+    assert __version__ == "0.11.0"
 
 
 def test_permission_denied_alias() -> None:
@@ -110,8 +111,27 @@ def test_health(client: Kaimei) -> None:
 
 
 def test_signup_sends_turnstile(client: Kaimei) -> None:
-    session = client.auth.signup(email="ada@example.com", password="correct-horse", turnstile_token="tok")
+    session = client.auth.signup(
+        email="ada@example.com", password="correct-horse", turnstile_token="tok", accept_terms=True
+    )
     assert session.access_token == "jwt"
+
+
+def test_reset_password_sends_the_terms_only_when_given() -> None:
+    sent: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "session", "access_token": "jwt"})
+
+    c = Kaimei(api_key="km_test_x", base_url="https://api.kaimei.ai")
+    c._transport._client = httpx.Client(base_url="https://api.kaimei.ai", transport=httpx.MockTransport(handler))
+    c.auth.reset_password(token="t" * 16, password="a-new-passphrase")
+    c.auth.reset_password(token="t" * 16, password="a-new-passphrase", accept_terms=True)
+    assert sent == [
+        {"token": "t" * 16, "password": "a-new-passphrase"},
+        {"token": "t" * 16, "password": "a-new-passphrase", "accept_terms": True},
+    ]
 
 
 def test_retries_on_429() -> None:
