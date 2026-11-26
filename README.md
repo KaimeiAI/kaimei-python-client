@@ -50,7 +50,7 @@ pip install "kaimei[models]"
 A model Kaimei has no reader of its own for is uploaded through ONNX ([below](#any-model-through-onnx)):
 
 ```bash
-pip install "kaimei[onnx]"   # NumPy and onnx; a PyTorch model needs nothing more
+pip install "kaimei[onnx]"   # NumPy, onnx and onnxscript; a PyTorch model needs nothing more
 pip install skl2onnx         # for scikit-learn estimators
 ```
 

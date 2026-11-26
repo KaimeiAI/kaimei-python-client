@@ -395,6 +395,9 @@ API 1.1.0 or 1.2.0, with these differences:
 
 ### Changed
 
+- `pip install "kaimei[onnx]"` also installs `onnxscript` (0.7.2 or later), which PyTorch's newer exporter needs:
+  Hugging Face language models and encoders only convert through it. It needs `onnx` 1.17 or later, which the
+  extra now asks for.
 - Estimators that were refused (`SVC` with a non-linear kernel, k-nearest neighbours, naive Bayes,
   `IsolationForest`, pipelines with `PCA` or `PolynomialFeatures`) and ones that were drawn (`SVC` and `NuSVC`
   with `probability=True`) are uploaded through ONNX and run, when `skl2onnx` is installed (such an SVC says how

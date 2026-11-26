@@ -33,8 +33,9 @@ dependencies = [
 models = ["numpy>=1.24"]
 images = ["numpy>=1.24", "pillow>=9"]
 # Any model, through ONNX: reading a .onnx file, and converting a PyTorch or scikit-learn model in memory.
-# The converters are the frameworks' own (torch's exporter, skl2onnx, tf2onnx) and are installed with them.
-onnx = ["numpy>=1.24", "onnx>=1.14"]
+# The converters are the frameworks' own (torch's exporter, skl2onnx, tf2onnx) and are installed with them, except
+# onnxscript: torch's newer exporter needs it, and Hugging Face language models and encoders only export through it.
+onnx = ["numpy>=1.24", "onnx>=1.17", "onnxscript>=0.7.2"]
 dev = [
   "pytest>=7",
   "respx>=0.21",
