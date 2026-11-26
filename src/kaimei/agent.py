@@ -1377,7 +1377,9 @@ class _OwnNumbers:
                 alias = getattr(argument, "alias_info", None)
                 if alias is None or not getattr(alias, "is_write", False):
                     continue
-                places = {str(argument.name)} if getattr(argument, "kwarg_only", False) else {str(argument.name), index}
+                places: Set[Any] = (
+                    {str(argument.name)} if getattr(argument, "kwarg_only", False) else {str(argument.name), index}
+                )
                 written |= places
                 if getattr(argument, "is_out", False) or str(argument.name) == "out":
                     out_only |= places

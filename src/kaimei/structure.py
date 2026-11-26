@@ -904,10 +904,11 @@ def _generators_as_they_were(estimator: Any) -> Any:
     torch: Any = None
     if _is_torch_module(estimator):
         try:
-            import torch
+            import torch as torch_module
 
             from . import graphs
 
+            torch = torch_module
             kept = graphs._random_state(estimator, torch)
         except Exception:  # noqa: BLE001 - no torch here, or a module that cannot say where it is: nothing to keep
             kept = None
