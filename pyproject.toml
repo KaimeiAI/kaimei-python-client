@@ -32,6 +32,9 @@ dependencies = [
 [project.optional-dependencies]
 models = ["numpy>=1.24"]
 images = ["numpy>=1.24", "pillow>=9"]
+# Any model, through ONNX: reading a .onnx file, and converting a PyTorch or scikit-learn model in memory.
+# The converters are the frameworks' own (torch's exporter, skl2onnx, tf2onnx) and are installed with them.
+onnx = ["numpy>=1.24", "onnx>=1.14"]
 dev = [
   "pytest>=7",
   "respx>=0.21",
@@ -86,3 +89,8 @@ warn_unused_ignores = false
 pretty = true
 packages = ["kaimei"]
 mypy_path = "src"
+
+# Copies of the API's modules, kept byte for byte (see tests/test_mirrors.py). They are typed and checked there.
+[[tool.mypy.overrides]]
+module = ["kaimei.onnx_graph", "kaimei.onnx_reader", "kaimei.tokenizers"]
+ignore_errors = true
