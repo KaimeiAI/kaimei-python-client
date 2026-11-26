@@ -635,6 +635,11 @@ client.analyses.create(model="credit-risk-v3", type="performance")
 history = client.models.monitoring("credit-risk-v3", window="day", days=30)
 [(day.start, day.status, day.top_feature) for day in history.series if day.status == "significant"]
 
+# Every logged prediction as a row, and what separates the model's answers most
+population = client.models.population("credit-risk-v3", days=30)
+[(field.name, field.separation) for field in population.fields[:3]]
+population.to_frame().groupby("input:home_ownership")["value"].mean()
+
 # Study the model as a whole, then read the insights
 analysis = client.analyses.create(model="credit-risk-v3", type="full")
 client.analyses.wait(analysis.id)

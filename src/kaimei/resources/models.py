@@ -263,6 +263,23 @@ class Models(Resource):
             compact({"window": window, "days": days, "feature": feature, "trailing": trailing, "points": points}),
         )
 
+    def population(self, model: str, *, days: int = 30, limit: int = 2000):
+        """A model's logged predictions one by one, and the ways they group.
+
+        ``rows`` holds the newest ``limit`` predictions of the last ``days`` as columns (``id``, ``time``,
+        ``value``, ``predicted``, ``actual``), and ``fields`` what they can be grouped by: every single-valued
+        input, metadata keys logged beside the predictions that have few values or are numbers, what was
+        predicted, what happened, and whether the two agree. Each field has its ``groups`` (label, rows, mean
+        output, predicted and recorded classes) and ``separation``, the share of the variation in the model's
+        answers that lies between its groups; the fields come most separating first.
+        ``kaimei.display.rows(population)`` and ``population.to_frame()`` give one row per prediction with a
+        column per field, ready for ``groupby``.
+
+        Nothing is run and nothing is stored, so this works for any model, one Kaimei cannot run included; a
+        model whose inputs are pictures, text or series is grouped by its metadata and its answers.
+        """
+        return self._get(f"/v1/models/{model}/population", {"days": days, "limit": limit})
+
     def upload_reference_data(
         self,
         model: str,

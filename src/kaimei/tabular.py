@@ -591,9 +591,14 @@ def _plot_drift(insight: Any, *, model: Any, max_items: int, ice: bool) -> Any:
     output_drift = payload.get("output_drift") or {}
     if output_drift:
         note += f" The predictions themselves: PSI {float(output_drift.get('psi', 0.0)):.3f} ({output_drift.get('status')})."
+    if payload.get("beyond_chance") is False and payload.get("chance") is not None:
+        note += f" As many rows drawn from the reference data itself score up to {float(payload['chance']):.2f}: at or under that is chance."
+    # A bar the reference data's own sampling can reach is drawn without a verdict's colour (API after 1.3.1).
+    told = [not (f.get("beyond_chance") is False and status != "stable") for f, status in zip(features, statuses)]
     fig, ax = _bars_figure(insight, names, note)
     for index, (value, status) in enumerate(zip(psi, statuses)):
-        ax.barh(index, value, height=0.62, color=STATUS.get(status, SERIES[0]), linewidth=0, zorder=3)
+        colour = STATUS.get(status, SERIES[0]) if told[index] else _MUTED
+        ax.barh(index, value, height=0.62, color=colour, linewidth=0, zorder=3)
     high = max(psi + [0.27])
     # "moderate" ends at its line and "significant" starts at its own, so they never overlap.
     for line, word, align in ((0.1, "moderate ", "right"), (0.25, " significant", "left")):

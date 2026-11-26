@@ -128,6 +128,66 @@ def test_monitoring_sends_its_parameters_and_leaves_out_an_unchosen_input():
     assert seen[-1][1] == {"window": "hour", "days": "3", "feature": "temperature", "trailing": "200", "points": "0"}
 
 
+def test_population_sends_its_parameters_and_reads_as_one_row_per_prediction():
+    seen = []
+    population = {
+        "object": "population",
+        "model_id": "mdl_1",
+        "shown": 3,
+        "output": {"kind": "probability", "name": "P(decline)", "classes": ["approve", "decline"], "positive": "decline"},
+        "fields": [
+            {"key": "input:contract", "name": "contract", "separation": 0.41, "groups": [{"label": "monthly", "rows": 2}, {"label": "yearly", "rows": 1}]},
+            {"key": "metadata:region", "name": "region", "separation": 0.0, "groups": [{"label": "east", "rows": 3}]},
+        ],
+        "rows": {
+            "id": ["pred_1", "pred_2", "pred_3"],
+            "time": ["2026-11-24T00:00:00Z", "2026-11-25T00:00:00Z", "2026-11-26T00:00:00Z"],
+            "value": [0.81, 0.12, 0.64],
+            "predicted": [1, 0, 1],
+            "actual": [1, None, 0],
+            "groups": {"input:contract": [0, 1, 0], "metadata:region": [0, 0, 0]},
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=population)
+
+    client = _client(handler)
+    answer = client.models.population("credit")
+    assert seen[-1] == ("/v1/models/credit/population", {"days": "30", "limit": "2000"})
+    client.models.population("credit", days=7, limit=500)
+    assert seen[-1][1] == {"days": "7", "limit": "500"}
+    assert answer.fields[0].key == "input:contract" and answer.fields[0].separation == 0.41
+    table, columns = display.rows(answer)
+    assert columns == ["id", "time", "value", "predicted", "actual"]
+    assert table[0] == {
+        "id": "pred_1", "time": "2026-11-24T00:00:00Z", "value": 0.81, "predicted": "decline", "actual": "decline",
+        "input:contract": "monthly", "metadata:region": "east",
+    }
+    assert table[1]["predicted"] == "approve" and table[1]["actual"] is None and table[1]["input:contract"] == "yearly"
+    # A regression's outcome is its number, not a class position.
+    numbers = dict(population, output={"kind": "value", "classes": []}, rows=dict(population["rows"], predicted=None, actual=[3.5, None, 2]))
+    assert [row["actual"] for row in display.rows(numbers)[0]] == [3.5, None, 2]
+    assert display.rows(numbers)[0][0]["predicted"] is None
+
+
+def test_a_drift_insight_within_chance_is_not_shown_as_drift():
+    payload = {
+        "features": [
+            {"feature": "utilization", "psi": 0.41, "status": "significant", "beyond_chance": False},
+            {"feature": "age", "psi": 0.03, "status": "stable", "beyond_chance": False},
+        ],
+        "overall_psi": 0.41, "status": "significant", "chance": 0.52, "beyond_chance": False,
+        "reference_rows": 600, "current_rows": 30, "drifted_features": [],
+    }
+    insight = {"object": "insight", "id": "ins_1", "type": "drift", "title": "Input drift", "summary": "", "severity": "low", "payload": payload}
+    html = render(insight)
+    assert "within chance" in html and "up to 0.52" in html and 'class="km-badge bad">significant' not in html
+    told = dict(insight, payload=dict(payload, beyond_chance=True, chance=0.07))
+    assert 'class="km-badge bad">significant' in render(told) and "within chance" not in render(told)
+
+
 def test_a_monitoring_history_is_a_table_of_windows():
     history = {
         "object": "monitoring",

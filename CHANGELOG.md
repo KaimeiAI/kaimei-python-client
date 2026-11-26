@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-Needs a Kaimei API with `GET /v1/models/{model}/monitoring` (the release after 1.3.0); an older API answers 404.
+Needs a Kaimei API with `GET /v1/models/{model}/monitoring` and `GET /v1/models/{model}/population` (the release
+after 1.3.1); an older API answers 404.
 
 ### Added
 
@@ -11,6 +12,16 @@ Needs a Kaimei API with `GET /v1/models/{model}/monitoring` (the release after 1
   PSI chance alone gives a window of that size, and one input drawn in full against the reference data.
   `kaimei.display.rows(history)` and `history.to_frame()` give one row per window, with each input's PSI as a
   `drift.<input>` column.
+- `client.models.population(model, days=30, limit=2000)`: a model's logged predictions one by one, with the
+  fields they can be grouped by (inputs, metadata keys, what was predicted, what happened) ranked by how far each
+  separates the model's answers. `kaimei.display.rows(population)` and `population.to_frame()` give one row per
+  prediction with a column per field, ready for `groupby`.
+
+### Changed
+
+- A drift insight whose score the reference data's own sampling can reach (the API's `beyond_chance: false`, after
+  1.3.1) is shown as `within chance` in a notebook, and its bars are drawn without a verdict's colour. Insights
+  from an older API show as before.
 
 ## 0.12.0 — 2026-11-25
 

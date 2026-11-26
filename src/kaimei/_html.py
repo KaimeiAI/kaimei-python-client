@@ -876,15 +876,23 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
             chips.append(_badge(f"{metric['name']} {fmt_number(metric.get('value'), 3)}", mono=True, title="Model metric on the reference rows"))
         return _badges(chips) + _share_bars(rows)
     if kind == "drift":
+        # A score that rows drawn from the reference data itself can reach is not shown as drift (API after 1.3.1).
         features = [
-            (str(f.get("feature")), _float(f.get("psi")) or 0.0, str(f.get("status") or ""))
+            (
+                str(f.get("feature")),
+                _float(f.get("psi")) or 0.0,
+                "" if f.get("beyond_chance") is False and f.get("status") != "stable" else str(f.get("status") or ""),
+            )
             for f in _dicts(payload.get("features"))
             if f.get("feature")
         ][:limit]
         chips = []
         if _float(payload.get("overall_psi")) is not None:
             chips.append(_badge(f"PSI {fmt_number(payload['overall_psi'], 3)}", mono=True, title="Population stability index over every input"))
-        if isinstance(payload.get("status"), str):
+        if payload.get("beyond_chance") is False and payload.get("status") in ("moderate", "significant"):
+            reach = f" (up to {fmt_number(payload['chance'], 2)})" if _float(payload.get("chance")) is not None else ""
+            chips.append(_badge("within chance", title=f"As many rows drawn from the reference data itself score as high{reach}"))
+        elif isinstance(payload.get("status"), str):
             chips.append(_badge(payload["status"], STATUS_TONE.get(payload["status"], "")))
         if payload.get("reference_rows") is not None and payload.get("current_rows") is not None:
             chips.append(_badge(f"{compact(payload['reference_rows'])} reference vs {compact(payload['current_rows'])} recent rows", mono=True))

@@ -116,6 +116,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     - a model: its features;
     - a performance report: one row per window;
     - a monitoring history: one row per window, with each input's PSI as a ``drift.<input>`` column;
+    - a population: one row per logged prediction, with a column per field holding the row's group;
     - a page: one row per item, nested fields flattened to dotted columns (``output.label``,
       ``attributions.Age``);
     - anything else: the record as one flattened row.
@@ -138,7 +139,55 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         # One row per window; each input's PSI is a column of its own (``drift.temperature``).
         windows = [flatten(w) for w in data.get("series") or [] if isinstance(w, Mapping)]
         return windows, list(_MONITORING_COLUMNS)
+    if kind == "population":
+        return _population_rows(data), list(_POPULATION_COLUMNS)
     return [flatten(data)], []
+
+
+#: A population's columns, the prediction first; one column per field (by its key) follows.
+_POPULATION_COLUMNS = ("id", "time", "value", "predicted", "actual")
+
+
+def _population_rows(data: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """One row per logged prediction: classes by name, and under each field's key the group the row is in."""
+
+    def mapping(value: Any) -> Mapping[str, Any]:
+        return value if isinstance(value, Mapping) else {}
+
+    columns = mapping(data.get("rows"))
+    classes = list(mapping(data.get("output")).get("classes") or [])
+    placed = mapping(columns.get("groups"))
+    fields = [
+        (str(f.get("key")), [g.get("label") for g in f.get("groups") or [] if isinstance(g, Mapping)])
+        for f in data.get("fields") or []
+        if isinstance(f, Mapping) and f.get("key")
+    ]
+
+    def at(name: str, index: int) -> Any:
+        column = columns.get(name)
+        return column[index] if isinstance(column, list) and index < len(column) else None
+
+    def named(position: Any) -> Any:
+        # A classifier's rows refer to its classes by position; a regression's outcome is its number.
+        if classes and isinstance(position, int) and not isinstance(position, bool):
+            return classes[position] if 0 <= position < len(classes) else None
+        return position
+
+    table: List[Dict[str, Any]] = []
+    for index, identifier in enumerate(columns.get("id") or []):
+        row: Dict[str, Any] = {
+            "id": identifier,
+            "time": at("time", index),
+            "value": at("value", index),
+            "predicted": named(at("predicted", index)),
+            "actual": named(at("actual", index)),
+        }
+        for key, labels in fields:
+            group = placed.get(key)
+            position = group[index] if isinstance(group, list) and index < len(group) else None
+            row[key] = labels[position] if isinstance(position, int) and 0 <= position < len(labels) else None
+        table.append(row)
+    return table
 
 
 #: A monitoring history's columns, the window first; the PSI of each input follows.
