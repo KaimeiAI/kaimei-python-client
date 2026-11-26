@@ -101,6 +101,7 @@ def test_performance_and_filters_send_their_parameters():
     assert report.overall.auc == 0.81
     client.predictions.list(model="credit", has_actual=False)
     assert seen[-1][1]["has_actual"] == "false"
+    client.predictions.create(model="credit", input={"x": 1}, actual="decline")
 
 
 def test_monitoring_sends_its_parameters_and_leaves_out_an_unchosen_input():
@@ -125,7 +126,24 @@ def test_monitoring_sends_its_parameters_and_leaves_out_an_unchosen_input():
     assert report.tape.points[0][2] == 61.7
     client.models.monitoring("load", window="hour", days=3, feature="temperature", trailing=200, points=0)
     assert seen[-1][1] == {"window": "hour", "days": "3", "feature": "temperature", "trailing": "200", "points": "0"}
-    client.predictions.create(model="credit", input={"x": 1}, actual="decline")
+
+
+def test_a_monitoring_history_is_a_table_of_windows():
+    history = {
+        "object": "monitoring",
+        "series": [
+            {"start": "2026-11-24T00:00:00Z", "end": "2026-11-25T00:00:00Z", "predictions": 107, "output": {"n": 107, "mean": 3301.2},
+             "rows": 500, "status": "stable", "overall_psi": 0.03, "top_feature": "hour", "chance": 0.07, "beyond_chance": False,
+             "drift": {"temperature": 0.02, "hour": 0.03}},
+            {"start": "2026-11-25T00:00:00Z", "end": "2026-11-26T00:00:00Z", "predictions": 192, "output": {"n": 192, "mean": 7214.0},
+             "rows": 500, "status": "significant", "overall_psi": 1.06, "top_feature": "temperature", "chance": 0.07, "beyond_chance": True,
+             "drift": {"temperature": 1.06, "hour": 0.02}},
+        ],
+    }
+    table, columns = display.rows(history)
+    assert list(columns[:3]) == ["start", "end", "predictions"] and "beyond_chance" in columns
+    assert [row["status"] for row in table] == ["stable", "significant"]
+    assert table[1]["drift.temperature"] == 1.06 and table[1]["output.mean"] == 7214.0 and table[0]["beyond_chance"] is False
 
 
 PERFORMANCE = {

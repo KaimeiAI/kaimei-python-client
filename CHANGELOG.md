@@ -9,6 +9,8 @@ Needs a Kaimei API with `GET /v1/models/{model}/monitoring` (the release after 1
 - `client.models.monitoring(model, window="day", days=30, feature=None, trailing=500, points=1500)`: a model's
   logged traffic over time, with the drift a check would have found at the end of every hour, day or week, the
   PSI chance alone gives a window of that size, and one input drawn in full against the reference data.
+  `kaimei.display.rows(history)` and `history.to_frame()` give one row per window, with each input's PSI as a
+  `drift.<input>` column.
 
 ## 0.12.0 — 2026-11-25
 

@@ -115,6 +115,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
       curve, histogram bins);
     - a model: its features;
     - a performance report: one row per window;
+    - a monitoring history: one row per window, with each input's PSI as a ``drift.<input>`` column;
     - a page: one row per item, nested fields flattened to dotted columns (``output.label``,
       ``attributions.Age``);
     - anything else: the record as one flattened row.
@@ -133,8 +134,15 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         return items, ["id", "object"]
     if kind == "performance":
         return [dict(w) for w in data.get("series") or [] if isinstance(w, Mapping)], list(_SERIES_COLUMNS)
+    if kind == "monitoring":
+        # One row per window; each input's PSI is a column of its own (``drift.temperature``).
+        windows = [flatten(w) for w in data.get("series") or [] if isinstance(w, Mapping)]
+        return windows, list(_MONITORING_COLUMNS)
     return [flatten(data)], []
 
+
+#: A monitoring history's columns, the window first; the PSI of each input follows.
+_MONITORING_COLUMNS = ("start", "end", "predictions", "output.mean", "rows", "status", "beyond_chance", "overall_psi", "chance", "top_feature")
 
 #: A performance series' columns, the window first.
 _SERIES_COLUMNS = ("start", "end", "n", "accuracy", "auc", "precision", "recall", "f1", "macro_f1", "mae", "rmse", "r2")
