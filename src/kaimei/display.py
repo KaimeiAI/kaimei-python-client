@@ -110,6 +110,8 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     - an explanation: one row per feature, ranked by |attribution| — the API's ``top_features``
       rows exactly, then the remaining ``attributions`` with ``share`` and ``rank`` computed the
       same way (image explanations list their regions instead);
+    - a decision record: one row per input's effect, strongest first, with the sentence that states it
+      (a record that is not explained yet lists its inputs as recorded);
     - an insight: the payload's table for its type (importance shares, drift PSI per feature,
       interaction pairs, fragile features, learned rules, one row per grid point of each behaviour
       curve, histogram bins);
@@ -123,6 +125,13 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     kind = str(data.get("object") or "")
     if kind == "explanation":
         return _explanation_rows(data)
+    if kind == "decision_record":
+        factors = [dict(f) for f in data.get("factors") or [] if isinstance(f, Mapping)]
+        if factors:
+            columns = ["rank", "feature", "label", "display", "attribution", "share", "direction", "stderr", "sentence"]
+            return factors, columns
+        inputs = [dict(i) for i in data.get("inputs") or [] if isinstance(i, Mapping)]
+        return inputs, ["name", "label", "value", "exact", "unit", "type"]
     if kind == "insight":
         return _insight_rows(data)
     if kind == "model":

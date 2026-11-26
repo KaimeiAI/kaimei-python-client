@@ -9,6 +9,7 @@ from ._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT, Transport
 from .resources.analyses import Analyses
 from .resources.api_keys import APIKeys
 from .resources.auth import Auth
+from .resources.decisions import Decisions
 from .resources.explanations import Explanations
 from .resources.insights import Insights
 from .resources.models import Models
@@ -59,6 +60,7 @@ class Kaimei:
             extra_headers=default_headers,
         )
         self.explanations = Explanations(self)
+        self.decisions = Decisions(self)
         self.models = Models(self)
         self.projects = Projects(self)
         self.predictions = Predictions(self)

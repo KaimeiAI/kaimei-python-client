@@ -643,6 +643,40 @@ for model in client.models.iterate():
 
 Dashboard sign-in (session token) is also supported via `client.auth.login(...)` / `client.auth.signup(...)`. Production sign-up needs a Cloudflare Turnstile token (`turnstile_token=...`), and every sign-up needs `accept_terms=True` once the person has agreed to the [Terms of Use](https://kaimei.ai/terms). Prefer creating API keys in the dashboard.
 
+## Decision records, for risk, compliance and legal
+
+A decision is a logged prediction, known by the id you logged it under. Its record says how the model reached
+it in sentences that can be filed: the outcome and the rule behind it, each input's effect, what would have
+changed the outcome, how it was computed and whether it can be reproduced, and what a record cannot show.
+
+```python
+# Log the decision under your own id, when it is made
+client.predictions.create(model="credit-risk-v3", prediction_id="APP-2026-00417", input=application, output=output)
+
+# Later, when someone asks why: explain it as it was logged, and read the record
+record = client.decisions.explain("APP-2026-00417", options={"frozen_features": ["age"]})
+print(record.outcome.sentence)       # The model gave this case a 59.5% chance of decline. That is at or above ...
+for factor in record.factors[:4]:
+    print(factor.sentence)           # Total monthly debt / monthly income (0.38) raised the chance of decline by ...
+print(record.counterfactual.sentence)
+record.to_frame()                    # one row per input's effect
+
+# The same record as a PDF, with its fingerprint on every page
+client.decisions.save_pdf("APP-2026-00417", "records/")       # records/decision-record-APP-2026-00417.pdf
+client.decisions.retrieve("APP-2026-00417").fingerprint.value  # the same value, for as long as the record is kept
+
+# Which decisions still have no explanation?
+client.decisions.list(model="credit-risk-v3", explained=False)
+```
+
+With nothing chosen, `explain` uses KernelSHAP where the model allows it, seed 0, and a counterfactual search
+for a table, so the same decision always gives the same numbers. A record states what Kaimei stored and
+computed; it does not make a decision, a notice or a filing compliant, and it is not legal advice.
+
+People who review decisions and build nothing can be given the `reviewer` role
+(`client.organization.invite(email=..., role="reviewer")`): they read everything, can explain a logged decision
+and save its record, and change nothing else.
+
 ## Resources
 
 | Attribute | Endpoints |
@@ -650,6 +684,7 @@ Dashboard sign-in (session token) is also supported via `client.auth.login(...)`
 | `client.models` | `/v1/models` |
 | `client.predictions` | `/v1/predictions` |
 | `client.explanations` | `/v1/explanations` |
+| `client.decisions` | `/v1/decisions` (records, `explain`, `pdf`, `save_pdf`) |
 | `client.analyses` | `/v1/analyses` |
 | `client.insights` | `/v1/insights` |
 | `client.auth` | `/v1/auth` |

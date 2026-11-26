@@ -21,6 +21,7 @@ import os
 from datetime import datetime, timedelta
 from html import escape
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import quote
 
 from ._inline import inline_styles
 
@@ -580,6 +581,7 @@ def render(data: Mapping[str, Any]) -> str:
     kind = str(data.get("object") or "")
     builder: Callable[[Mapping[str, Any]], str] = {
         "explanation": _explanation,
+        "decision_record": _decision_record,
         "insight": _insight,
         "model": _model,
         "prediction": _prediction,
@@ -668,6 +670,111 @@ def _explanation(data: Mapping[str, Any]) -> str:
         left += f" · model <span class=km-mono>{_e(data['model_id'])}</span>"
     link = _link(f"/explanations/{data['id']}", "Open in dashboard") if data.get("id") else ""
     out.append(_foot(left, link))
+    return "".join(out)
+
+
+def _decision_record(data: Mapping[str, Any]) -> str:
+    """A decision record. Every sentence is the API's own; the card only lays them out."""
+    outcome = _map(data.get("outcome"))
+    model = _map(data.get("model"))
+    explanation = _map(data.get("explanation"))
+    factors = [f for f in (data.get("factors") or []) if isinstance(f, Mapping)]
+    decided = _e(long_date(data["decided_at"])) if data.get("decided_at") else ""
+
+    out = [_head("Decision record", data.get("id"), decided)]
+    kind = outcome.get("kind")
+    main, sub = "", ""
+    if kind == "number" and _float(outcome.get("value")) is not None:
+        main = fmt_value(outcome.get("value"), outcome.get("unit") or None)
+        sub = str(outcome.get("name") or "")
+    elif outcome.get("label") is not None:
+        main = str(outcome["label"])
+        if kind == "binary" and _float(outcome.get("probability")) is not None:
+            sub = f"P({outcome.get('positive_label')}) = {pct(outcome['probability'], 1)} · threshold {pct(outcome.get('threshold'), 0)}"
+        elif _float(outcome.get("probability")) is not None:
+            sub = f"P({outcome['label']}) = {pct(outcome['probability'], 1)}"
+    if main:
+        tail = f'<span class="km-sub">{_e(sub)}</span>' if sub else ""
+        out.append(f'<div class="km-result"><span class="km-value">{_e(main)}</span>{tail}</div>')
+    badges = []
+    if model.get("name"):
+        badges.append(_badge(f"{model['name']} · v{model.get('version')}", title="The model that made this decision"))
+    if explanation:
+        why = str(explanation.get("reproducible_sentence") or "")
+        badges.append(_badge(explanation.get("method_name") or explanation.get("method") or "explained", "ok"))
+        badges.append(_badge("reproducible", "ok", title=why) if explanation.get("reproducible") else _badge("not exactly reproducible", "warn", title=why))
+    else:
+        badges.append(_badge("not explained", "warn", title="client.decisions.explain(id) adds how the model reached it"))
+    out.append(_badges(badges))
+    if outcome.get("sentence"):
+        out.append(f'<div class="km-lead" style="color:var(--text);font-size:14px">{_e(outcome["sentence"])}</div>')
+    for note in data.get("notes") or []:
+        out.append(f'<div class="km-lead">{_badge("note", "warn")} {_e(note)}</div>')
+
+    if explanation:
+        out.append('<div class="km-h">How the model reached it</div>')
+        reference = _map(explanation.get("reference")).get("sentence")
+        if reference:
+            out.append(f'<div class="km-lead">{_e(reference)}</div>')
+        rows = [
+            (str(f.get("label") or f.get("feature")), None if f.get("display") is None else str(f.get("display")), _float(f.get("attribution")) or 0.0)
+            for f in factors
+        ]
+        legend = ("toward", "against") if explanation.get("measure") == "evidence" else ("raises it", "lowers it")
+        out.append(_diverging_bars(rows[:14], legend=legend))
+        if len(rows) > 14:
+            out.append(_details(f"All {len(rows)} effects", _diverging_bars(rows[14:])))
+        if explanation.get("summary"):
+            out.append(f'<div class="km-lead" style="color:var(--text);margin-top:10px">{_e(explanation["summary"])}</div>')
+        stated = [f for f in factors if f.get("direction") != "none" and f.get("sentence")]
+        if stated:
+            lines = "".join(f'<div>{_e(f.get("rank"))}. {_e(f["sentence"])}</div>' for f in stated)
+            out.append(_details("In words", f'<div class="km-cf">{lines}</div>', open_=len(stated) <= 6, note=f"{len(stated)} effects"))
+
+    counterfactual = _map(data.get("counterfactual"))
+    if counterfactual.get("sentence"):
+        body = f'<div>{_e(counterfactual["sentence"])}</div><span class="km-faint">{_e(counterfactual.get("note") or "")}</span>'
+        out.append(_details("What would have changed the outcome", f'<div class="km-cf">{body}</div>', open_=True))
+
+    inputs = [i for i in (data.get("inputs") or []) if isinstance(i, Mapping)]
+    if inputs:
+        table = _table(
+            [("Input", ""), ("Name", "mono muted"), ("Value as stored", "mono"), ("Unit", "muted")],
+            (
+                [
+                    _e(i.get("label") or ""),
+                    _e(i.get("name") or ""),
+                    _e(i.get("exact") if i.get("exact") is not None else i.get("display") or ""),
+                    _e(i.get("unit") or ""),
+                ]
+                for i in inputs
+            ),
+        )
+        out.append(_details("Inputs as recorded", table, note=f"{len(inputs)} inputs"))
+    if explanation:
+        compared = _map(explanation.get("reference"))
+        source = str(compared.get("source_words") or compared.get("source") or "")
+        if compared.get("rows"):
+            source = f"{int(compared['rows']):,} rows from {source}"
+        how = [
+            ("method", _e(f"{explanation.get('method_name')}. {explanation.get('method_sentence') or ''}".strip())),
+            ("reproducible", _e(explanation.get("reproducible_sentence") or "")),
+            ("compared with", _e(source)),
+            ("seed", _e("none" if explanation.get("seed") is None else explanation.get("seed"))),
+            ("explanation", _e(explanation.get("id") or "")),
+            ("computed", _e(long_date(explanation["computed_at"])) if explanation.get("computed_at") else ""),
+        ]
+        out.append(_details("How this was computed", _kv_table(how)))
+    limits = [item for item in (data.get("limits") or []) if isinstance(item, Mapping)]
+    if limits:
+        lines = "".join(f'<div><b>{_e(item.get("title"))}</b> {_e(item.get("text"))}</div>' for item in limits)
+        notice = f'<span class="km-faint">{_e(data.get("notice") or "")}</span>'
+        out.append(_details("What this record does not show", f'<div class="km-cf">{lines}{notice}</div>'))
+    out.append(_raw_json("JSON", data, note="to_json() has everything"))
+    mark = str(_map(data.get("fingerprint")).get("value") or "")
+    left = f'Fingerprint <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
+    where = "/decisions/" + "/".join(quote(part, safe="") for part in str(data.get("id") or "").split("/"))
+    out.append(_foot(left, _link(where, "Open in dashboard") if data.get("id") else ""))
     return "".join(out)
 
 
@@ -1195,6 +1302,27 @@ def _page_table(kind: str, items: Sequence[Mapping[str, Any]]) -> str:
             [("ID", "mono"), ("Model", "mono muted"), ("Output", ""), ("Top features", "wrap"), ("Method", ""), ("Evals", "num"), ("Latency", "num"), ("When", "muted")],
             rows,
         )
+    if kind == "decision":
+        rows = []
+        for d in items:
+            outcome = _map(d.get("outcome"))
+            if outcome.get("label") is not None:
+                chance = _float(outcome.get("probability"))
+                shown = f"<b>{_e(outcome['label'])}</b>" + (f' <span class="km-faint">{pct(chance, 1)}</span>' if chance is not None else "")
+            elif _float(outcome.get("value")) is not None:
+                shown = f"<b>{_e(fmt_value(outcome.get('value'), outcome.get('unit') or None))}</b>"
+            else:
+                shown = '<span class="km-faint">not logged</span>'
+            rows.append(
+                [
+                    _e(d.get("id") or ""),
+                    _e(d.get("model_id") or ""),
+                    shown,
+                    _badge("explained", "ok") if d.get("explained") else _badge("not explained"),
+                    _date_cell(d.get("decided_at")),
+                ]
+            )
+        return _table([("Decision id", "mono"), ("Model", "mono muted"), ("Outcome", ""), ("Record", ""), ("Decided", "muted")], rows)
     if kind == "insight":
         rows = [
             [

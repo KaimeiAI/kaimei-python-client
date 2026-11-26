@@ -35,7 +35,10 @@ class Organization(Resource):
         return self._page("/v1/organization/members", {"limit": limit, "offset": offset})
 
     def update_member(self, user_id: str, *, role: str) -> APIObject:
-        """Change a member's role: ``owner``, ``admin``, ``member`` or ``viewer``."""
+        """Change a member's role: ``owner``, ``admin``, ``member``, ``reviewer`` or ``viewer``.
+
+        A reviewer reads everything and can have a logged decision explained (``client.decisions.explain``),
+        and changes nothing else: the role for counsel, compliance and audit."""
         return self._patch(f"/v1/organization/members/{user_id}", {"role": role})
 
     def remove_member(self, user_id: str):
@@ -76,7 +79,7 @@ class Organization(Resource):
         )
 
     def invite(self, *, email: str, role: str = "member") -> APIObject:
-        """Invite an email address as ``admin``, ``member`` or ``viewer``. The result carries ``invite_url``,
+        """Invite an email address as ``admin``, ``member``, ``reviewer`` or ``viewer``. The result carries ``invite_url``,
         which is shown only here, and ``email_sent``, which is false when the link was not mailed."""
         return self._post("/v1/organization/invitations", {"email": email, "role": role})
 

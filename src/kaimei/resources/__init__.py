@@ -1,6 +1,7 @@
 from .analyses import Analyses
 from .api_keys import APIKeys
 from .auth import Auth
+from .decisions import Decisions
 from .explanations import Explanations
 from .insights import Insights
 from .models import Models
@@ -13,6 +14,7 @@ __all__ = [
     "Analyses",
     "APIKeys",
     "Auth",
+    "Decisions",
     "Explanations",
     "Insights",
     "Invitations",

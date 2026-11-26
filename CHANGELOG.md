@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Needs the Kaimei API release that adds `/v1/decisions`: deploy the API first. Against an older API these calls
+raise `NotFoundError`; everything else works as it did.
+
+### Added
+
+- **`client.decisions`**: decision records, for the people who answer for a model's decisions.
+  `retrieve(decision_id)` returns one logged decision and how the model reached it, found by the id it was logged
+  under: the outcome, each input's effect with the sentence that states it, what would have changed the outcome,
+  how it was computed, what a record cannot show, and a SHA-256 `fingerprint` of the stored facts.
+  `explain(decision_id)` explains a decision that is already logged, as it was logged, and returns its record.
+  `list(model=, q=, explained=)` and `iterate()` find decisions; `pdf(decision_id)` returns the record as a PDF
+  and `save_pdf(decision_id, path)` writes it. An id keeps its slashes in the address; everything else is escaped.
+- **A decision record shows as a card in a notebook**, with the API's own sentences, and `to_frame()` gives one
+  row per input's effect. A page of decisions shows as a table.
+- **The `reviewer` role** can be given in `organization.invite` and `organization.update_member`: it reads
+  everything and can call `decisions.explain`, and nothing else that writes.
+
 ## 0.12.0 — 2026-11-25
 
 What is new needs Kaimei API 1.3.0, which adds model graphs (structures of `family: "graph"`), tensors of whole
