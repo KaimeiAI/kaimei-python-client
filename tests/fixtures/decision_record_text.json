@@ -1,0 +1,371 @@
+{
+ "object": "decision_record",
+ "id": "pred_208b3e4c352a3319f285",
+ "status": "explained",
+ "logged": true,
+ "decided_at": "2026-11-26T17:49:54.091146Z",
+ "source": "sdk",
+ "model": {
+  "id": "mdl_reviews",
+  "name": "Review sentiment",
+  "slug": "review-sentiment-v1",
+  "version": "1",
+  "task": "binary_classification",
+  "framework": "pytorch",
+  "status": "active"
+ },
+ "outcome": {
+  "kind": "binary",
+  "name": "prediction",
+  "output": {
+   "label": "negative",
+   "class_index": 0,
+   "probability": 0.9999589920043945,
+   "probabilities": {
+    "negative": 0.9999589920043945,
+    "positive": 4.101213562535122e-05
+   },
+   "target_label": "positive",
+   "target_index": 1,
+   "value": 4.101213562535122e-05,
+   "name": "prediction"
+  },
+  "sentence": "The model gave this case a less than 0.1% chance of positive. That is below the 50% threshold, so the outcome is negative.",
+  "label": "negative",
+  "probabilities": {
+   "negative": 0.9999589920043945,
+   "positive": 4.101213562535122e-05
+  },
+  "positive_label": "positive",
+  "other_label": "negative",
+  "probability": 4.101213562535122e-05,
+  "threshold": 0.5
+ },
+ "inputs": [
+  {
+   "name": "review",
+   "label": "Review",
+   "type": "text",
+   "value": "the cast was superb but i skipped the ending.",
+   "display": "the cast was superb but i skipped the ending.",
+   "exact": "the cast was superb but i skipped the ending.",
+   "unit": null,
+   "description": "A film review of up to 16 words, in the model's own small vocabulary",
+   "declared": true
+  }
+ ],
+ "actual": null,
+ "explanation": {
+  "id": "exp_34ea149a2d99fda8e194",
+  "method": "occlusion",
+  "method_name": "Occlusion",
+  "method_sentence": "Each part is hidden in turn, and the change in the model's answer is its effect.",
+  "computed_at": "2026-11-26T20:51:23.520538Z",
+  "exact": false,
+  "seed": 0,
+  "reproducible": true,
+  "reproducible_sentence": "Occlusion hides each part in turn and samples nothing, so the same model version gives the same numbers every time.",
+  "model_calls": 13,
+  "reference": {
+   "source": "hidden_input",
+   "source_words": "the same input with its parts hidden",
+   "rows": null,
+   "sentence": null
+  },
+  "kind": "text",
+  "explains": "the chance of positive",
+  "target_label": "positive",
+  "measure": "chance",
+  "unit": null,
+  "adds_up": false,
+  "base_value": 0.9782851338386536,
+  "value": 4.101213562535122e-05,
+  "total": null,
+  "summary": null,
+  "options": {
+   "seed": 0,
+   "counterfactual": false,
+   "max_changes": 3,
+   "frozen_features": [],
+   "log_prediction": false,
+   "top_k": 100,
+   "feature": "review",
+   "input_kind": "text",
+   "hidden_with": "the unknown token",
+   "target": "positive",
+   "score": 4.101213562535122e-05,
+   "hidden_score": 0.9782851338386536,
+   "background_source": "hidden_input"
+  },
+  "requested_by": {
+   "name": "Kaimei Demo",
+   "role": "owner"
+  },
+  "parts": true
+ },
+ "factors": [
+  {
+   "rank": 1,
+   "feature": "review[6]",
+   "label": "“skipped”",
+   "value": null,
+   "display": null,
+   "attribution": -0.9990161019886727,
+   "share": 0.335,
+   "direction": "lowers",
+   "sentence": "The token “skipped” (7 of 10) lowered the chance of positive by 99.9 percentage points: with it hidden, the model gives 99.9% instead of less than 0.1%.",
+   "order": 7
+  },
+  {
+   "rank": 2,
+   "feature": "review[8]",
+   "label": "“ending”",
+   "value": null,
+   "display": null,
+   "attribution": -0.9919344741429086,
+   "share": 0.3327,
+   "direction": "lowers",
+   "sentence": "The token “ending” (9 of 10) lowered the chance of positive by 99.2 percentage points: with it hidden, the model gives 99.2% instead of less than 0.1%.",
+   "order": 9
+  },
+  {
+   "rank": 3,
+   "feature": "review[9]",
+   "label": "“.”",
+   "value": null,
+   "display": null,
+   "attribution": -0.990409548910975,
+   "share": 0.3321,
+   "direction": "lowers",
+   "sentence": "The token “.” (10 of 10) lowered the chance of positive by 99.0 percentage points: with it hidden, the model gives 99.0% instead of less than 0.1%.",
+   "order": 10
+  },
+  {
+   "rank": 4,
+   "feature": "review[7]",
+   "label": "“the”",
+   "value": null,
+   "display": null,
+   "attribution": -0.0004541253365459852,
+   "share": 0.0002,
+   "direction": "lowers",
+   "sentence": "The token “the” (8 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 8
+  },
+  {
+   "rank": 5,
+   "feature": "review[3]",
+   "label": "“superb”",
+   "value": null,
+   "display": null,
+   "attribution": 1.212056668009609e-05,
+   "share": 0.0,
+   "direction": "raises",
+   "sentence": "The token “superb” (4 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 4
+  },
+  {
+   "rank": 6,
+   "feature": "review[0]",
+   "label": "“the”",
+   "value": null,
+   "display": null,
+   "attribution": -1.0180061508435756e-05,
+   "share": 0.0,
+   "direction": "lowers",
+   "sentence": "The token “the” (1 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 1
+  },
+  {
+   "rank": 7,
+   "feature": "review[2]",
+   "label": "“was”",
+   "value": null,
+   "display": null,
+   "attribution": -6.1226601246744394e-06,
+   "share": 0.0,
+   "direction": "lowers",
+   "sentence": "The token “was” (3 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 3
+  },
+  {
+   "rank": 8,
+   "feature": "review[4]",
+   "label": "“but”",
+   "value": null,
+   "display": null,
+   "attribution": -4.634301149053499e-06,
+   "share": 0.0,
+   "direction": "lowers",
+   "sentence": "The token “but” (5 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 5
+  },
+  {
+   "rank": 9,
+   "feature": "review[1]",
+   "label": "“cast”",
+   "value": null,
+   "display": null,
+   "attribution": -1.7509082681499422e-06,
+   "share": 0.0,
+   "direction": "lowers",
+   "sentence": "The token “cast” (2 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 2
+  },
+  {
+   "rank": 10,
+   "feature": "review[5]",
+   "label": "“i”",
+   "value": null,
+   "display": null,
+   "attribution": 1.1638039723038673e-06,
+   "share": 0.0,
+   "direction": "raises",
+   "sentence": "The token “i” (6 of 10) had almost no effect on the chance of positive.",
+   "negligible": true,
+   "order": 6
+  }
+ ],
+ "counterfactual": null,
+ "view": {
+  "kind": "text",
+  "feature": "review",
+  "label": "Review",
+  "sentences": [
+   "The model read this text as 10 tokens.",
+   "With every token hidden (each replaced by the unknown token), the chance of positive is 97.8%. For the text as it was given it is less than 0.1%.",
+   "Each token's effect was measured on its own, by hiding it and running the model again, so the effects do not add up to the prediction."
+  ],
+  "parts": [
+   {
+    "key": "review[0]",
+    "label": "the",
+    "attribution": -1.0180061508435756e-05,
+    "direction": "lowers",
+    "strength": 0.0,
+    "rank": 6,
+    "position": 0
+   },
+   {
+    "key": "review[1]",
+    "label": "cast",
+    "attribution": -1.7509082681499422e-06,
+    "direction": "lowers",
+    "strength": 0.0,
+    "rank": 9,
+    "position": 1
+   },
+   {
+    "key": "review[2]",
+    "label": "was",
+    "attribution": -6.1226601246744394e-06,
+    "direction": "lowers",
+    "strength": 0.0,
+    "rank": 7,
+    "position": 2
+   },
+   {
+    "key": "review[3]",
+    "label": "superb",
+    "attribution": 1.212056668009609e-05,
+    "direction": "raises",
+    "strength": 0.0,
+    "rank": 5,
+    "position": 3
+   },
+   {
+    "key": "review[4]",
+    "label": "but",
+    "attribution": -4.634301149053499e-06,
+    "direction": "lowers",
+    "strength": 0.0,
+    "rank": 8,
+    "position": 4
+   },
+   {
+    "key": "review[5]",
+    "label": "i",
+    "attribution": 1.1638039723038673e-06,
+    "direction": "raises",
+    "strength": 0.0,
+    "rank": 10,
+    "position": 5
+   },
+   {
+    "key": "review[6]",
+    "label": "skipped",
+    "attribution": -0.9990161019886727,
+    "direction": "lowers",
+    "strength": 1.0,
+    "rank": 1,
+    "position": 6
+   },
+   {
+    "key": "review[7]",
+    "label": "the",
+    "attribution": -0.0004541253365459852,
+    "direction": "lowers",
+    "strength": 0.0005,
+    "rank": 4,
+    "position": 7
+   },
+   {
+    "key": "review[8]",
+    "label": "ending",
+    "attribution": -0.9919344741429086,
+    "direction": "lowers",
+    "strength": 0.9929,
+    "rank": 2,
+    "position": 8
+   },
+   {
+    "key": "review[9]",
+    "label": ".",
+    "attribution": -0.990409548910975,
+    "direction": "lowers",
+    "strength": 0.9914,
+    "rank": 3,
+    "position": 9
+   }
+  ],
+  "parts_total": 10,
+  "hidden_with": "the unknown token"
+ },
+ "notes": [],
+ "limits": [
+  {
+   "title": "It describes the model, not the world.",
+   "text": "It shows how the model reached its output. On its own it does not show that the decision was fair, lawful or correct."
+  },
+  {
+   "title": "It is not causation.",
+   "text": "It shows how the model's output responds to its inputs, not that changing an input in the real world would change the real outcome."
+  },
+  {
+   "title": "It is not a fairness test.",
+   "text": "A protected characteristic can influence decisions through other inputs that correlate with it, without appearing in the list."
+  },
+  {
+   "title": "It does not check the data.",
+   "text": "If an input is wrong, the explanation faithfully explains the wrong input."
+  },
+  {
+   "title": "It does not see your policy.",
+   "text": "Rules applied outside the model, such as cut-offs, overlays and manual decisions, are not part of the explanation."
+  }
+ ],
+ "notice": "This record states what Kaimei stored and computed. It can support a compliance process; it does not make a decision, a notice or a filing compliant, and it is not legal advice.",
+ "other_explanations": [],
+ "logged_output": null,
+ "fingerprint": {
+  "algorithm": "sha256",
+  "value": "7a667b527c489fad5af601257b111a29007d3c8528235bf7cc5db7d021defc9b",
+  "covers": "The decision id, the model and its version, the logged input, output and time, and the explanation's method, options and numbers."
+ }
+}

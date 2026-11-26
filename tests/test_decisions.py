@@ -16,7 +16,9 @@ import pytest
 from kaimei import APIObject, Kaimei, NotFoundError, display
 from kaimei.resources.decisions import record_filename
 
-RECORD = json.loads((Path(__file__).parent / "fixtures" / "decision_record.json").read_text(encoding="utf-8"))
+RECORD = json.loads(
+    (Path(__file__).parent / "fixtures" / "decision_record.json").read_text(encoding="utf-8")
+)
 PDF = b"%PDF-1.4\n% a decision record\n%%EOF\n"
 
 
@@ -43,15 +45,40 @@ def client(calls: List[httpx.Request]) -> Kaimei:
                 "explained_at": RECORD["explanation"]["computed_at"],
                 "has_actual": False,
             }
-            return httpx.Response(200, json={"object": "list", "data": [item], "total": 1, "limit": 20, "offset": 0, "has_more": False})
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [item],
+                    "total": 1,
+                    "limit": 20,
+                    "offset": 0,
+                    "has_more": False,
+                },
+            )
         if path.endswith("/explanation") and request.method == "POST":
             return httpx.Response(201, json=RECORD)
-        if path in ("/v1/decisions/APP-2026-00417", "/v1/decisions/LOAN/2026/0042", "/v1/decisions/a%20b%3Fc") and request.method == "GET":
+        if (
+            path
+            in (
+                "/v1/decisions/APP-2026-00417",
+                "/v1/decisions/LOAN/2026/0042",
+                "/v1/decisions/a%20b%3Fc",
+            )
+            and request.method == "GET"
+        ):
             if query.get("format") == "pdf":
                 return httpx.Response(200, content=PDF, headers={"Content-Type": "application/pdf"})
             return httpx.Response(200, json=RECORD)
         return httpx.Response(
-            404, json={"error": {"type": "not_found_error", "code": "decision_not_found", "message": "No decision with that id."}}
+            404,
+            json={
+                "error": {
+                    "type": "not_found_error",
+                    "code": "decision_not_found",
+                    "message": "No decision with that id.",
+                }
+            },
         )
 
     c = Kaimei(api_key="km_test_x", base_url="https://api.kaimei.ai")
@@ -67,13 +94,19 @@ def _sent(request: httpx.Request) -> Dict[str, Any]:
     return json.loads(request.content) if request.content else {}
 
 
-def test_a_record_is_read_by_the_id_the_decision_was_logged_under(client: Kaimei, calls: List[httpx.Request]) -> None:
+def test_a_record_is_read_by_the_id_the_decision_was_logged_under(
+    client: Kaimei, calls: List[httpx.Request]
+) -> None:
     record = client.decisions.retrieve("APP-2026-00417")
     assert isinstance(record, APIObject)
     assert record.status == "explained"
     assert record.outcome.sentence.startswith("The model gave this case a 59.5% chance of decline.")
-    assert record.explanation.method_name == "KernelSHAP" and record.explanation.reproducible is True
-    assert record.factors[0].sentence.endswith("raised the chance of decline by 8.0 percentage points.")
+    assert (
+        record.explanation.method_name == "KernelSHAP" and record.explanation.reproducible is True
+    )
+    assert record.factors[0].sentence.endswith(
+        "raised the chance of decline by 8.0 percentage points."
+    )
     assert len(record.fingerprint.value) == 64
     assert calls[-1].url.path == "/v1/decisions/APP-2026-00417" and not calls[-1].url.params
 
@@ -81,7 +114,9 @@ def test_a_record_is_read_by_the_id_the_decision_was_logged_under(client: Kaimei
     assert dict(calls[-1].url.params) == {"explanation": "exp_9"}
 
 
-def test_an_id_keeps_its_slashes_and_has_everything_else_escaped(client: Kaimei, calls: List[httpx.Request]) -> None:
+def test_an_id_keeps_its_slashes_and_has_everything_else_escaped(
+    client: Kaimei, calls: List[httpx.Request]
+) -> None:
     client.decisions.retrieve("LOAN/2026/0042")
     assert calls[-1].url.raw_path == b"/v1/decisions/LOAN/2026/0042"
     client.decisions.retrieve("a b?c")
@@ -92,9 +127,17 @@ def test_an_id_keeps_its_slashes_and_has_everything_else_escaped(client: Kaimei,
         client.decisions.retrieve("NO-SUCH-ID")
 
 
-def test_decisions_are_listed_with_their_filters(client: Kaimei, calls: List[httpx.Request]) -> None:
+def test_decisions_are_listed_with_their_filters(
+    client: Kaimei, calls: List[httpx.Request]
+) -> None:
     page = client.decisions.list(model="credit-risk-v3", q="APP-2026", explained=False, limit=5)
-    assert dict(calls[-1].url.params) == {"model": "credit-risk-v3", "q": "APP-2026", "explained": "false", "limit": "5", "offset": "0"}
+    assert dict(calls[-1].url.params) == {
+        "model": "credit-risk-v3",
+        "q": "APP-2026",
+        "explained": "false",
+        "limit": "5",
+        "offset": "0",
+    }
     assert page.data[0].id == "APP-2026-00417" and page.data[0].explained is True
     assert [item.id for item in client.decisions.iterate(explained=True)] == ["APP-2026-00417"]
     assert "explained" in display.html(page) and "APP-2026-00417" in display.html(page)
@@ -102,16 +145,26 @@ def test_decisions_are_listed_with_their_filters(client: Kaimei, calls: List[htt
 
 def test_explaining_sends_only_what_was_chosen(client: Kaimei, calls: List[httpx.Request]) -> None:
     record = client.decisions.explain("APP-2026-00417")
-    assert calls[-1].method == "POST" and calls[-1].url.path == "/v1/decisions/APP-2026-00417/explanation"
+    assert (
+        calls[-1].method == "POST"
+        and calls[-1].url.path == "/v1/decisions/APP-2026-00417/explanation"
+    )
     assert calls[-1].content == b""  # nothing chosen: the API explains it its recommended way
     assert record.object == "decision_record"
 
-    client.decisions.explain("LOAN/2026/0042", method="shapley", options={"seed": 7, "frozen_features": ["age"]})
+    client.decisions.explain(
+        "LOAN/2026/0042", method="shapley", options={"seed": 7, "frozen_features": ["age"]}
+    )
     assert calls[-1].url.raw_path == b"/v1/decisions/LOAN/2026/0042/explanation"
-    assert _sent(calls[-1]) == {"method": "shapley", "options": {"seed": 7, "frozen_features": ["age"]}}
+    assert _sent(calls[-1]) == {
+        "method": "shapley",
+        "options": {"seed": 7, "frozen_features": ["age"]},
+    }
 
 
-def test_the_document_comes_back_as_bytes_and_saves_under_the_api_name(client: Kaimei, calls: List[httpx.Request], tmp_path: Path) -> None:
+def test_the_document_comes_back_as_bytes_and_saves_under_the_api_name(
+    client: Kaimei, calls: List[httpx.Request], tmp_path: Path
+) -> None:
     assert client.decisions.pdf("APP-2026-00417") == PDF
     assert dict(calls[-1].url.params) == {"format": "pdf", "paper": "letter"}
     client.decisions.pdf("APP-2026-00417", explanation="exp_9", paper="a4")
@@ -153,7 +206,13 @@ def test_a_card_escapes_what_a_record_holds() -> None:
 
 def test_a_record_that_is_not_explained_says_so_and_lists_its_inputs() -> None:
     pending = json.loads(json.dumps(RECORD))
-    pending.update(status="not_explained", explanation=None, factors=[], counterfactual=None, notes=["This decision is logged but has not been explained."])
+    pending.update(
+        status="not_explained",
+        explanation=None,
+        factors=[],
+        counterfactual=None,
+        notes=["This decision is logged but has not been explained."],
+    )
     card = display.html(pending)
     assert "not explained" in card and "has not been explained" in card
     assert "How the model reached it" not in card
@@ -172,5 +231,47 @@ def test_a_record_is_a_table_of_its_effects() -> None:
 def test_a_record_is_a_frame_of_its_effects() -> None:
     pd = pytest.importorskip("pandas")
     frame = APIObject(RECORD).to_frame()
-    assert isinstance(frame, pd.DataFrame) and list(frame.columns[:3]) == ["rank", "feature", "label"]
+    assert isinstance(frame, pd.DataFrame) and list(frame.columns[:3]) == [
+        "rank",
+        "feature",
+        "label",
+    ]
     assert frame["attribution"].abs().is_monotonic_decreasing
+
+
+TEXT = json.loads(
+    (Path(__file__).parent / "fixtures" / "decision_record_text.json").read_text(encoding="utf-8")
+)
+
+
+def test_a_text_record_shows_the_text_token_by_token() -> None:
+    assert TEXT["view"]["kind"] == "text" and TEXT["explanation"]["kind"] == "text"
+    card = display.html(TEXT)
+    # The record's own account of what the model read, then the text with each token on its effect's colour.
+    assert "The model read this text as 10 tokens." in card
+    assert "With every token hidden (each replaced by the unknown token)" in card
+    for part in TEXT["view"]["parts"]:
+        assert f">{part['label']}</span>" in card
+    assert card.count("rgba(255,107,181,") >= 3  # the three tokens that lowered it, and the key
+    assert (
+        "skipped\u201d (7 of 10) lowered the chance of positive by 99.9 percentage points" in card
+    )
+    # Effects too small to print are not listed in words. (The folded JSON under the card still holds them.)
+    shown = card.split('class="km-raw"')[0]
+    assert "had almost no effect" not in shown and "had almost no effect" in card
+    table, columns = display.rows(TEXT)
+    assert len(table) == 10 and table[0]["label"] == "\u201cskipped\u201d" and "order" in table[0]
+
+
+def test_a_picture_record_points_to_where_the_picture_is_drawn() -> None:
+    picture = json.loads(json.dumps(RECORD))
+    picture["view"] = {
+        "kind": "image",
+        "feature": "image",
+        "label": "Image",
+        "sentences": ["The evidence for cat sits on the left side."],
+    }
+    picture["explanation"]["kind"] = "image"
+    card = display.html(picture)
+    assert "The evidence for cat sits on the left side." in card
+    assert "client.decisions.save_pdf" in card

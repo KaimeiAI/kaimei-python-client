@@ -160,6 +160,7 @@
    "rows": 64,
    "sentence": "The starting point is 49.0%: the model's average chance of decline across 64 rows drawn from the model's reference data."
   },
+  "kind": "table",
   "explains": "the chance of decline",
   "target_label": "decline",
   "measure": "chance",
@@ -317,6 +318,7 @@
   "label_after": "approve",
   "sentence": "Changing bureau credit score from 681 to 850 would move the chance of decline from 59.5% to 8.3%, which makes the outcome approve. Held fixed in the search: applicant age."
  },
+ "view": null,
  "notes": [],
  "limits": [
   {

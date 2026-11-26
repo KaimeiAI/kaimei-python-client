@@ -711,11 +711,22 @@ def _decision_record(data: Mapping[str, Any]) -> str:
     for note in data.get("notes") or []:
         out.append(f'<div class="km-lead">{_badge("note", "warn")} {_e(note)}</div>')
 
+    view = _map(data.get("view"))
     if explanation:
         out.append('<div class="km-h">How the model reached it</div>')
         reference = _map(explanation.get("reference")).get("sentence")
-        if reference:
+        # A picture, a text or a series: the record's own account of what the model was looking at.
+        for sentence in view.get("sentences") or []:
+            out.append(f'<div class="km-lead" style="margin-bottom:6px">{_e(sentence)}</div>')
+        if reference and not view:
             out.append(f'<div class="km-lead">{_e(reference)}</div>')
+        if view.get("kind") == "text" and view.get("parts"):
+            out.append(_token_strip([part for part in view["parts"] if isinstance(part, Mapping)]))
+        elif view.get("kind") == "image":
+            out.append(
+                '<div class="km-faint" style="margin:0 0 10px">The picture, with the model\'s evidence drawn on it, is in the '
+                "PDF (<span class=km-mono>client.decisions.save_pdf</span>) and on the record in the dashboard.</div>"
+            )
         rows = [
             (str(f.get("label") or f.get("feature")), None if f.get("display") is None else str(f.get("display")), _float(f.get("attribution")) or 0.0)
             for f in factors
@@ -726,7 +737,9 @@ def _decision_record(data: Mapping[str, Any]) -> str:
             out.append(_details(f"All {len(rows)} effects", _diverging_bars(rows[14:])))
         if explanation.get("summary"):
             out.append(f'<div class="km-lead" style="color:var(--text);margin-top:10px">{_e(explanation["summary"])}</div>')
-        stated = [f for f in factors if f.get("direction") != "none" and f.get("sentence")]
+        moved = [f for f in factors if f.get("direction") != "none" and f.get("sentence")]
+        # An effect too small to print has a sentence that says so; a list in words leaves those out.
+        stated = [f for f in moved if not f.get("negligible")] or moved
         if stated:
             lines = "".join(f'<div>{_e(f.get("rank"))}. {_e(f["sentence"])}</div>' for f in stated)
             out.append(_details("In words", f'<div class="km-cf">{lines}</div>', open_=len(stated) <= 6, note=f"{len(stated)} effects"))
@@ -753,8 +766,8 @@ def _decision_record(data: Mapping[str, Any]) -> str:
         out.append(_details("Inputs as recorded", table, note=f"{len(inputs)} inputs"))
     if explanation:
         compared = _map(explanation.get("reference"))
-        source = str(compared.get("source_words") or compared.get("source") or "")
-        if compared.get("rows"):
+        source = str(compared.get("source_words") or "")
+        if source and compared.get("rows"):
             source = f"{int(compared['rows']):,} rows from {source}"
         how = [
             ("method", _e(f"{explanation.get('method_name')}. {explanation.get('method_sentence') or ''}".strip())),
@@ -776,6 +789,26 @@ def _decision_record(data: Mapping[str, Any]) -> str:
     where = "/decisions/" + "/".join(quote(part, safe="") for part in str(data.get("id") or "").split("/"))
     out.append(_foot(left, _link(where, "Open in dashboard") if data.get("id") else ""))
     return "".join(out)
+
+
+def _token_strip(parts: Sequence[Mapping[str, Any]]) -> str:
+    """A text as the model read it: each token on the colour of its effect, stronger for a larger one."""
+    chips = []
+    for part in parts:
+        strength = max(0.0, min(1.0, _float(part.get("strength")) or 0.0))
+        direction = part.get("direction")
+        style = "display:inline-block;padding:1px 5px;margin:2px 1px;border-radius:5px;border:1px solid var(--line)"
+        if direction in ("raises", "lowers") and strength >= 0.02:
+            hue = "107,140,255" if direction == "raises" else "255,107,181"
+            style += f";background:rgba({hue},{0.14 + 0.5 * strength:.2f})"
+        value = _float(part.get("attribution"))
+        title = f' title="{_e(fmt_signed(value, 4))}"' if value is not None else ""
+        chips.append(f'<span style="{style}"{title}>{_e(part.get("label"))}</span>')
+    key = (
+        '<div class="km-legend" style="margin-top:6px"><span><i style="background:rgba(107,140,255,.6)"></i>raised it</span>'
+        '<span><i style="background:rgba(255,107,181,.6)"></i>lowered it</span></div>'
+    )
+    return f'<div style="margin:2px 0 12px;line-height:2">{"".join(chips)}{key}</div>'
 
 
 def _attribution_rows(data: Mapping[str, Any], inputs: Mapping[str, Any]) -> List[Tuple[str, Optional[str], float]]:

@@ -15,7 +15,9 @@ raise `NotFoundError`; everything else works as it did.
   `list(model=, q=, explained=)` and `iterate()` find decisions; `pdf(decision_id)` returns the record as a PDF
   and `save_pdf(decision_id, path)` writes it. An id keeps its slashes in the address; everything else is escaped.
 - **A decision record shows as a card in a notebook**, with the API's own sentences, and `to_frame()` gives one
-  row per input's effect. A page of decisions shows as a table.
+  row per input's effect. A page of decisions shows as a table. A text model's record shows the text token by token,
+  each token on the colour of its effect; a picture's record says where the model looked, and its PDF
+  (`decisions.save_pdf`) holds the picture with the evidence drawn over it.
 - **The `reviewer` role** can be given in `organization.invite` and `organization.update_member`: it reads
   everything and can call `decisions.explain`, and nothing else that writes.
 

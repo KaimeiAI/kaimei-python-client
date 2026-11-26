@@ -669,6 +669,10 @@ client.decisions.retrieve("APP-2026-00417").fingerprint.value  # the same value,
 client.decisions.list(model="credit-risk-v3", explained=False)
 ```
 
+For a picture, a text or a series, `record.view.sentences` says what the model was looking at (where its evidence
+sits in the picture, which tokens or steps moved the answer and by how much), and the PDF draws it: the picture
+with the evidence over it, the text with each token on its effect's colour, the series with its effects under it.
+
 With nothing chosen, `explain` uses KernelSHAP where the model allows it, seed 0, and a counterfactual search
 for a table, so the same decision always gives the same numbers. A record states what Kaimei stored and
 computed; it does not make a decision, a notice or a filing compliant, and it is not legal advice.
