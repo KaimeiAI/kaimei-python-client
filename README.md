@@ -631,6 +631,10 @@ report = client.models.performance("credit-risk-v3", window="week", days=90)
 # Has quality dropped by more than chance explains? Also part of every full analysis.
 client.analyses.create(model="credit-risk-v3", type="performance")
 
+# When did an input start to drift? What a drift check would have found at the end of every day, from the log
+history = client.models.monitoring("credit-risk-v3", window="day", days=30)
+[(day.start, day.status, day.top_feature) for day in history.series if day.status == "significant"]
+
 # Study the model as a whole, then read the insights
 analysis = client.analyses.create(model="credit-risk-v3", type="full")
 client.analyses.wait(analysis.id)

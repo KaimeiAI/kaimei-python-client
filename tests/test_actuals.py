@@ -101,6 +101,30 @@ def test_performance_and_filters_send_their_parameters():
     assert report.overall.auc == 0.81
     client.predictions.list(model="credit", has_actual=False)
     assert seen[-1][1]["has_actual"] == "false"
+
+
+def test_monitoring_sends_its_parameters_and_leaves_out_an_unchosen_input():
+    seen = []
+    history = {
+        "object": "monitoring",
+        "model_id": "mdl_1",
+        "window": "hour",
+        "series": [{"start": "2026-11-01T00:00:00Z", "status": "significant", "overall_psi": 1.5, "chance": 0.04}],
+        "features": [{"name": "temperature", "peak_psi": 1.5}],
+        "tape": {"feature": {"name": "temperature"}, "points": [["pred_1", "2026-11-01T00:10:00Z", 61.7, 88.2]]},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=history)
+
+    client = _client(handler)
+    report = client.models.monitoring("load")
+    assert seen[-1] == ("/v1/models/load/monitoring", {"window": "day", "days": "30", "trailing": "500", "points": "1500"})
+    assert report.series[0].status == "significant" and report.features[0].name == "temperature"
+    assert report.tape.points[0][2] == 61.7
+    client.models.monitoring("load", window="hour", days=3, feature="temperature", trailing=200, points=0)
+    assert seen[-1][1] == {"window": "hour", "days": "3", "feature": "temperature", "trailing": "200", "points": "0"}
     client.predictions.create(model="credit", input={"x": 1}, actual="decline")
 
 

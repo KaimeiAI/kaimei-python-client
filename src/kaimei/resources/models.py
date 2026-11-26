@@ -234,6 +234,35 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
 
+    def monitoring(
+        self,
+        model: str,
+        *,
+        window: str = "day",
+        days: int = 30,
+        feature: Optional[str] = None,
+        trailing: int = 500,
+        points: int = 1500,
+    ):
+        """What was logged for a model over the last ``days``, and what a drift check would have found along it.
+
+        ``series`` has one entry per ``hour`` / ``day`` / ``week``: the predictions logged in it, their mean output,
+        and each input's PSI for the ``trailing`` rows that were the latest when it ended, with the same thresholds
+        as the drift analysis (``status`` is ``stable``, ``moderate`` or ``significant``). ``chance`` is the PSI that
+        many rows drawn from the reference data itself can reach: at or under it, drift cannot be told from sampling,
+        and ``beyond_chance`` is ``False``. A window of few rows scores high by sampling alone, so read both.
+        ``features`` ranks the inputs by their highest PSI. ``tape`` draws one input in full (``feature``, or the most
+        drifted): up to ``points`` logged predictions as ``[id, time, input value, output]``, the reference data's
+        histogram and each window's. ``insights`` are the stored drift and performance insights in the range.
+
+        Nothing is run and nothing is stored. Drift needs reference data and inputs that are single values (a table);
+        without them ``drift_unavailable`` says why and the traffic is still returned.
+        """
+        return self._get(
+            f"/v1/models/{model}/monitoring",
+            compact({"window": window, "days": days, "feature": feature, "trailing": trailing, "points": points}),
+        )
+
     def upload_reference_data(
         self,
         model: str,

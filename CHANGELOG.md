@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Needs a Kaimei API with `GET /v1/models/{model}/monitoring` (the release after 1.3.0); an older API answers 404.
+
+### Added
+
+- `client.models.monitoring(model, window="day", days=30, feature=None, trailing=500, points=1500)`: a model's
+  logged traffic over time, with the drift a check would have found at the end of every hour, day or week, the
+  PSI chance alone gives a window of that size, and one input drawn in full against the reference data.
+
 ## 0.12.0 — 2026-11-25
 
 What is new needs Kaimei API 1.3.0, which adds model graphs (structures of `family: "graph"`), tensors of whole
