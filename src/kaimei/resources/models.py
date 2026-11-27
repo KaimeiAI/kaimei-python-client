@@ -5,6 +5,7 @@ import numbers
 import os
 import re
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import (
     Any,
@@ -134,8 +135,11 @@ class Models(Resource):
         metadata: Optional[Mapping[str, Any]] = None,
         structure: Optional[Mapping[str, Any]] = None,
         project_id: Optional[str] = None,
+        performance_metric: Optional[str] = None,
         **extra: Any,
     ):
+        """Register a model. ``performance_metric`` (``"precision"`` or ``"recall"``, classifiers only) is what its
+        performance checks watch instead of AUC or accuracy; see :meth:`set_performance_metric`."""
         body = {
             "name": name,
             "task": task,
@@ -150,6 +154,7 @@ class Models(Resource):
             "metadata": dict(metadata) if metadata else None,
             "structure": dict(structure) if structure else None,
             "project_id": project_id,
+            "performance_metric": performance_metric,
         }
         body.update(extra)
         return self._post("/v1/models", compact(body))
@@ -232,8 +237,37 @@ class Models(Resource):
         ``overall`` holds the metrics (accuracy, precision, recall, F1, AUC, Brier, calibration and the confusion
         matrix for a binary model; macro F1 and per-class numbers for multiclass; MAE, RMSE, bias and R² for a
         regression); ``series`` the headline numbers per window; ``coverage`` the share of predictions with an outcome.
+        ``days=0`` reads the whole history, back to the first logged prediction (Kaimei API 1.6.0).
         """
         return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
+
+    def pr_curve(self, model: str, *, days: int = 90):
+        """Precision against recall at every threshold, over the last ``days`` of outcomes; ``None`` without one.
+
+        For a two-class model whose logged predictions carry a score. ``points`` (lowest threshold first) give the
+        counts ``tp``, ``fp``, ``fn``, ``tn`` and the ``precision``, ``recall`` and ``f1`` when a row counts as
+        positive at a score of at least ``threshold``; ``threshold`` is the model's own, ``prevalence`` the share of
+        positives. ``pandas.DataFrame(curve.points)`` makes a table; :func:`kaimei.threshold_for` picks a threshold.
+        The average precision is in ``performance(...).overall.average_precision``.
+        """
+        report = self.performance(model, days=days)
+        return (report.get("overall") or {}).get("pr_curve")
+
+    def set_performance_metric(self, model: str, metric: Optional[str]):
+        """Have a classifier's performance checks watch ``"precision"`` or ``"recall"`` (their macro average over
+        more than two classes) instead of AUC or accuracy; ``None`` goes back to the default.
+
+        A degradation check and its alerts then compare that number with the outcomes before, as they did AUC.
+        An API from before precision and recall ignores the field, so this raises :class:`KaimeiError` there
+        rather than leave the checks watching what they did.
+        """
+        answer = self._patch(f"/v1/models/{model}", {"performance_metric": metric})
+        if "performance_metric" not in answer:
+            raise KaimeiError(
+                "This Kaimei API does not know performance_metric, so nothing changed: its performance checks still "
+                "watch AUC or accuracy. Upgrade the API to choose precision or recall."
+            )
+        return answer
 
     def monitoring(
         self,
@@ -244,8 +278,18 @@ class Models(Resource):
         feature: Optional[str] = None,
         trailing: int = 500,
         points: int = 1500,
+        detail: bool = False,
+        compare: str = "latest",
+        baseline_since: Optional[Union[str, datetime]] = None,
+        baseline_until: Optional[Union[str, datetime]] = None,
+        segment: Optional[str] = None,
+        segment_value: Optional[Any] = None,
+        segment_low: Optional[float] = None,
+        segment_high: Optional[float] = None,
+        bins: int = 24,
     ):
         """What was logged for a model over the last ``days``, and what a drift check would have found along it.
+        ``days=0`` reads the whole history (Kaimei API 1.6.0), with the window widened where it cannot hold it.
 
         ``series`` has one entry per ``hour`` / ``day`` / ``week``: the predictions logged in it, their mean output,
         and each input's PSI for the ``trailing`` rows that were the latest when it ended, with the same thresholds
@@ -260,28 +304,104 @@ class Models(Resource):
 
         Nothing is run and nothing is stored. Drift needs reference data and inputs that are single values (a table);
         without them ``drift_unavailable`` says why and the traffic is still returned.
+
+        Other ways to read it: ``compare="window"`` has each window's check read only the rows logged in
+        it. ``baseline_since`` and ``baseline_until`` compare with the traffic logged in that stretch instead of the
+        reference data. ``segment`` keeps only the rows, on both sides, whose input of that name holds
+        ``segment_value`` (a category's level, or yes or no) or lies from ``segment_low`` up to ``segment_high``.
+        ``bins`` is how finely the drawn input's shape is counted.
+
+        ``detail=True`` adds ``detail``, aligned with ``series``: per input and window the two-sample tests (``ks`` and
+        ``ks_p`` for a number, ``chi2`` and ``chi2_p`` for a category, with ``alpha``, the p-value one input is held
+        to), the size of the shift (``wasserstein``, ``wasserstein_std``, ``js``, ``mean_shift``), the share outside the
+        reference (``outside``) and the data quality of the rows logged (``quality``); the drawn input's quantiles and
+        its PSI bin by bin (``profile``); what the model said and how right it was per window (``outputs``,
+        ``performance``); and how the inputs move together (``correlations``, ``multivariate``).
         """
+        if isinstance(baseline_since, datetime):
+            baseline_since = baseline_since.isoformat()
+        if isinstance(baseline_until, datetime):
+            baseline_until = baseline_until.isoformat()
+        if isinstance(segment_value, bool):
+            segment_value = "yes" if segment_value else "no"
         return self._get(
             f"/v1/models/{model}/monitoring",
-            compact({"window": window, "days": days, "feature": feature, "trailing": trailing, "points": points}),
+            compact(
+                {
+                    "window": window,
+                    "days": days,
+                    "feature": feature,
+                    "trailing": trailing,
+                    "points": points,
+                    # Only what differs from the API's defaults, so a request to an older API reads as it did.
+                    "detail": True if detail else None,
+                    "compare": compare if compare != "latest" else None,
+                    "baseline_since": baseline_since,
+                    "baseline_until": baseline_until,
+                    "segment": segment,
+                    "segment_value": None if segment_value is None else str(segment_value),
+                    "segment_low": segment_low,
+                    "segment_high": segment_high,
+                    "bins": bins if bins != 24 else None,
+                }
+            ),
         )
 
     def population(self, model: str, *, days: int = 30, limit: int = 2000):
         """A model's logged predictions one by one, and the ways they group.
 
-        ``rows`` holds the newest ``limit`` predictions of the last ``days`` as columns (``id``, ``time``,
-        ``value``, ``predicted``, ``actual``), and ``fields`` what they can be grouped by: every single-valued
-        input, metadata keys logged beside the predictions that have few values or are numbers, what was
-        predicted, what happened, and whether the two agree. Each field has its ``groups`` (label, rows, mean
-        output, predicted and recorded classes) and ``separation``, the share of the variation in the model's
-        answers that lies between its groups; the fields come most separating first.
-        ``kaimei.display.rows(population)`` and ``population.to_frame()`` give one row per prediction with a
-        column per field, ready for ``groupby``.
+        ``days=0`` reads the whole history (Kaimei API 1.6.0). ``rows`` holds the newest ``limit`` predictions of the
+        last ``days`` as columns (``id``, ``time``, ``value``, ``predicted``, ``actual``), and ``fields`` what they
+        can be grouped by: every single-valued input, metadata keys logged beside the predictions that have few values
+        or are numbers, what was predicted, what happened, and whether the two agree. Each field has its ``groups``
+        (label, rows, mean output, predicted and recorded classes) and ``separation``, the share of the variation in
+        the model's answers that lies between its groups; the fields come most separating first.
+        ``kaimei.display.rows(population)`` and ``population.to_frame()`` give one row per prediction with a column
+        per field, ready for ``groupby``.
 
         Nothing is run and nothing is stored, so this works for any model, one Kaimei cannot run included; a
         model whose inputs are pictures, text or series is grouped by its metadata and its answers.
         """
         return self._get(f"/v1/models/{model}/population", {"days": days, "limit": limit})
+
+    def alpha(
+        self,
+        model: str,
+        *,
+        days: int = 120,
+        window: int = 20,
+        horizons: int = 10,
+        entity: Optional[str] = None,
+        date: Optional[str] = None,
+        segments: Optional[Sequence[str]] = None,
+        factors: bool = True,
+    ):
+        """How well a return forecast ranked each date's universe, and whether that is holding up, over the last
+        ``days`` (``0`` for the whole history).
+
+        For a regression that scores many securities on each date (a model with ``outputs.alpha``, or any
+        regression when ``entity`` and ``date`` name the metadata keys that hold the security and the as-of
+        date), read from its logged forecasts and their outcomes. ``daily`` has each date's ``rank_ic``, ``ic``,
+        ``hit_rate`` and top-minus-bottom ``spread``; ``summary`` the mean rank IC, its spread, ``icir`` and
+        ``icir_annual``; ``decay`` checks the latest ``window`` dates against the dates before them and the
+        expected IC (``status`` is ``decaying``, ``stable``, ``improving`` or ``insufficient_data``);
+        ``horizons`` gives the IC ``horizons`` dates ahead and the ``half_life``; ``turnover``, ``quantiles``,
+        ``factors`` and ``families`` (each input's and each family's own IC, and which have ``weakened`` or
+        ``flipped``) and ``segments`` (the IC within groups of a metadata key) follow.
+        ``kaimei.display.rows(alpha)`` and ``alpha.to_frame()`` give one row per date.
+
+        Nothing is run and nothing is stored. Needs Kaimei API with ``GET /v1/models/{model}/alpha``.
+        """
+        params = {
+            "days": days,
+            "window": window,
+            "horizons": horizons,
+            "entity": entity,
+            "date": date,
+            "segments": ",".join(segments) if segments is not None else None,
+            "factors": "true" if factors else "false",
+        }
+        return self._get(f"/v1/models/{model}/alpha", compact(params))
 
     def similar(
         self,
@@ -341,8 +461,8 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/holdings")
 
-    def case_study(self, model: str):
-        """A model written up as a case study, from what Kaimei already holds about it.
+    def summary(self, model: str):
+        """A model summed up, from what Kaimei already holds about it.
 
         ``headline`` says what the model is, ``facts`` are the key numbers, and ``sections`` are always the same
         ten in order: ``overview``, ``drivers``, ``behaviour``, ``interactions``, ``example`` (one stored
@@ -351,19 +471,32 @@ class Models(Resource):
         from the numbers, a ``status`` (``ready``, ``stale`` when its insight is older than 30 days, or
         ``missing``), ``applies`` (false when this kind of model cannot have the section), a ``table`` of its key
         numbers and the ``data`` a chart needs. ``gaps`` lists what is not on file and what would add it.
-        ``kaimei.display.rows(study)`` and ``study.to_frame()`` give one row per section.
+        ``kaimei.display.rows(summary)`` and ``summary.to_frame()`` give one row per section.
 
         Nothing is run and nothing is stored: the model is not called and no analysis is started, so this
-        works for any model and counts against no limit. ``case_study_markdown`` gives the same as text.
+        works for any model and counts against no limit. ``summary_markdown`` gives the same as text. It needs API
+        1.6.0; 1.5 has it only as the case study (``case_study``).
         """
-        return self._get(f"/v1/models/{model}/case-study")
+        return self._get(f"/v1/models/{model}/summary")
 
-    def case_study_markdown(self, model: str) -> str:
-        """The model's case study (see ``case_study``) as a Markdown document, ready for a wiki or a model card.
+    def summary_markdown(self, model: str) -> str:
+        """The model's summary (see ``summary``) as a Markdown document, ready for a wiki or a model card.
 
         A title, the facts as a table, a heading per section with its sentences and a table of its key numbers,
         and the list of what is not on file. It holds no HTML.
         """
+        raw = self._client._request("GET", f"/v1/models/{model}/summary", params={"format": "markdown"}, raw=True)
+        return bytes(raw).decode("utf-8")
+
+    def case_study(self, model: str):
+        """Deprecated: use ``summary``. The same, at the path API 1.5.0 gave it, so it also works against 1.5.0;
+        its ``object`` is ``model_case_study``."""
+        warnings.warn("models.case_study is now models.summary", DeprecationWarning, stacklevel=2)
+        return self._get(f"/v1/models/{model}/case-study")
+
+    def case_study_markdown(self, model: str) -> str:
+        """Deprecated: use ``summary_markdown``. The same, at the path API 1.5.0 gave it."""
+        warnings.warn("models.case_study_markdown is now models.summary_markdown", DeprecationWarning, stacklevel=2)
         raw = self._client._request("GET", f"/v1/models/{model}/case-study", params={"format": "markdown"}, raw=True)
         return bytes(raw).decode("utf-8")
 

@@ -659,11 +659,12 @@ holdings.runs.sentence
 [(item.label, item.held, item.count, item.bytes) for item in holdings.items]
 [(crossing.when, crossing.what) for crossing in holdings.crosses]
 
-# The model as one readable case study, written from what is already stored (nothing is run; API 1.5.0)
-study = client.models.case_study("credit-risk-v3")
-[(section.title, section.status, section.summary) for section in study.sections]
-[gap.title for gap in study.gaps]  # what is not on file, and gap.how says what would add it
-open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.case_study_markdown("credit-risk-v3"))
+# The model summed up in one readable account, written from what is already stored (nothing is run;
+# API 1.6.0; before it, client.models.case_study)
+summary = client.models.summary("credit-risk-v3")
+[(section.title, section.status, section.summary) for section in summary.sections]
+[gap.title for gap in summary.gaps]  # what is not on file, and gap.how says what would add it
+open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.summary_markdown("credit-risk-v3"))
 
 # Two models on the same rows (two versions, or a champion and a challenger): do they agree, and where not? (API 1.5.0)
 both = client.models.compare("loan-forest-v1", "loan-scorecard-v1")

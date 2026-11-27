@@ -1,12 +1,13 @@
-"""A model's report: the JSON, the Markdown, one row per section, and the notebook card."""
+"""A model's summary: the JSON, the Markdown, one row per section, and the notebook card."""
 
 import httpx
+import pytest
 
 from kaimei import Kaimei, display
 from kaimei._html import render
 
 REPORT = {
-    "object": "model_case_study",
+    "object": "model_summary",
     "model": {"id": "mdl_1", "slug": "credit", "name": "Credit <risk> scorer", "version": "3", "task": "binary_classification"},
     "generated_at": "2026-11-26T19:19:47Z",
     "stale_after_days": 30,
@@ -65,7 +66,7 @@ def _client(handler) -> Kaimei:
     return c
 
 
-def test_case_study_reads_the_json_and_case_study_markdown_the_document():
+def test_summary_reads_the_json_and_summary_markdown_the_document():
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -75,14 +76,14 @@ def test_case_study_reads_the_json_and_case_study_markdown_the_document():
         return httpx.Response(200, json=REPORT)
 
     client = _client(handler)
-    report = client.models.case_study("credit")
-    assert seen[-1] == ("GET", "/v1/models/credit/case-study", {})
+    report = client.models.summary("credit")
+    assert seen[-1] == ("GET", "/v1/models/credit/summary", {})
     assert report.headline.startswith("A yes-or-no classifier") and report.model.slug == "credit"
     assert [section.key for section in report.sections] == ["drivers", "interactions", "performance"]
     assert report.sections[0].status == "stale" and report.sections[0].data.payload.features[0].share == 0.25
     assert report.sections[1].applies is False and report.gaps[0].sections == ["performance"]
-    text = client.models.case_study_markdown("credit")
-    assert seen[-1] == ("GET", "/v1/models/credit/case-study", {"format": "markdown"})
+    text = client.models.summary_markdown("credit")
+    assert seen[-1] == ("GET", "/v1/models/credit/summary", {"format": "markdown"})
     # The document comes back as text, with what is not ASCII in it intact.
     assert isinstance(text, str) and text == MARKDOWN and "−2 °C" in text
 
@@ -99,12 +100,12 @@ def test_a_report_reads_as_one_row_per_section():
         "as_of": "2026-10-01T12:00:00Z",
         "summary": "`credit_score` moves the model's answer most: 25% of the measured importance.",
     }
-    assert display.rows({"object": "model_case_study", "sections": None}) == ([], columns)
+    assert display.rows({"object": "model_summary", "sections": None}) == ([], columns)
 
 
 def test_the_notebook_card_says_what_each_section_says_and_what_is_missing():
     html = render(REPORT)
-    assert "Case study" in html and "Credit &lt;risk&gt; scorer" in html and "<risk>" not in html
+    assert "Summary" in html and "Credit &lt;risk&gt; scorer" in html and "<risk>" not in html
     # Names are set in backticks in the API's sentences; a card shows them as plain words.
     assert "decides between approve and decline." in html and "`" not in html.split("</style>")[-1]
     assert "Reference rows" in html and ">600<" in html and "with labels" in html
@@ -113,7 +114,32 @@ def test_the_notebook_card_says_what_each_section_says_and_what_is_missing():
     assert "credit_score moves the model&#x27;s answer most" in html
     assert ">stale<" in html and ">does not apply<" in html and ">missing<" in html
     assert "What is not on file (1)" in html and "<b>No outcomes recorded.</b> Attach them with POST /v1/predictions/actuals." in html
-    assert "/models/credit/case-study" in html
+    assert "/models/credit/summary" in html
     # A report with nothing missing has no list of gaps, and one with no sections still draws.
     assert "What is not on file" not in render(dict(REPORT, gaps=[]))
-    assert "Case study" in render({"object": "model_case_study", "model": {}, "sections": [], "facts": [], "gaps": []})
+    assert "Summary" in render({"object": "model_summary", "model": {}, "sections": [], "facts": [], "gaps": []})
+
+
+def test_case_study_still_calls_the_1_5_0_path_and_says_it_is_deprecated():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        if request.url.params.get("format") == "markdown":
+            return httpx.Response(200, content=MARKDOWN.encode("utf-8"), headers={"content-type": "text/markdown; charset=utf-8"})
+        return httpx.Response(200, json=dict(REPORT, object="model_case_study"))
+
+    client = _client(handler)
+    with pytest.warns(DeprecationWarning, match="models.summary"):
+        old = client.models.case_study("credit")
+    assert seen[-1] == ("/v1/models/credit/case-study", {}) and old.headline == REPORT["headline"]
+    with pytest.warns(DeprecationWarning, match="summary_markdown"):
+        assert client.models.case_study_markdown("credit") == MARKDOWN
+    assert seen[-1] == ("/v1/models/credit/case-study", {"format": "markdown"})
+
+
+def test_a_1_5_0_case_study_reads_and_draws_as_a_summary():
+    legacy = dict(REPORT, object="model_case_study")
+    assert display.rows(legacy) == display.rows(REPORT)
+    html = render(legacy)
+    assert "Summary" in html and "What drives its answers" in html and "/models/credit/summary" in html

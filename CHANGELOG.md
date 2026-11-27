@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.15.0 — 2026-11-27
+
+For Kaimei API 1.6.0. Against an older API every call works as it did; the new ones say what they need below.
+
+### Added
+
+- `days=0` reads a model's whole history, back to its first logged prediction, in `client.models.performance`,
+  `monitoring`, `population`, `alpha` and `pr_curve` (Kaimei API 1.6.0; an older API refuses it with a
+  `ValidationError`).
+- `client.models.pr_curve(model, days=90)`: precision against recall at every threshold for a two-class model
+  whose logged predictions carry a score. `points` hold the counts and measures at each threshold;
+  `pandas.DataFrame(curve.points)` makes a table. It returns `None` where the API sends no curve.
+- `kaimei.threshold_for(curve, min_precision=...)` or `min_recall=...`: the point that meets one target best
+  (the most recall at that precision, or the most precision at that recall). It only reads the curve; the
+  model's threshold changes only when you register a new one.
+- `client.models.set_performance_metric(model, "precision" | "recall" | None)`, and `performance_metric` on
+  `client.models.create`: what a classifier's performance checks and alerts watch in place of AUC or accuracy.
+  An older API ignores the field: `set_performance_metric` then raises `KaimeiError` saying nothing changed, and
+  `create` registers the model without it.
+- `kaimei.display.rows` of a performance report or insight has `average_precision`, `macro_precision` and
+  `macro_recall` columns, and a performance insight's card shows precision and recall beside the number its
+  check watches, as shares.
+- `client.models.monitoring` reads a history other ways: `compare="window"` (each window's check reads only the
+  rows logged in it), `baseline_since` / `baseline_until` (compare with a stretch of logged traffic instead of the
+  reference data), `segment` with `segment_value` or `segment_low` / `segment_high` (drift within one slice of the
+  traffic, on both sides), and `bins` (how finely the drawn input's shape is counted). Only what differs from the
+  API's defaults is sent, so an older API answers as it did.
+- `client.models.monitoring(model, detail=True)` adds `detail`: per input and window the two-sample tests (KS for a
+  number, chi-square for a category) with the `alpha` one input is held to, the size of the shift (Wasserstein,
+  Jensen-Shannon, mean shift), the share outside the reference and the data quality of the rows logged; the drawn
+  input's quantiles and its PSI bin by bin; what the model said and how right it was per window, by the metric its
+  checks watch; and how the inputs move together (rank correlations between pairs, and a reconstruction error).
+  An older API leaves `detail` out.
+- `client.models.alpha(model, days=120, window=20, horizons=10, entity=None, date=None, segments=None,
+  factors=True)`: how well a return forecast ranked each date's universe (`GET /v1/models/{model}/alpha`): each
+  date's rank IC, the ICIR, a decay check against the earlier dates and the expected IC, the IC by horizon and its
+  half-life, turnover, bucket returns, which inputs and families of inputs have weakened or flipped, and the IC
+  within segments. `kaimei.display.rows(alpha)` and `alpha.to_frame()` give one row per date. Against an older
+  API it raises `NotFoundError`.
+
+### Changed
+
+- **A model's case study is now its summary.** `client.models.summary(model)` and
+  `client.models.summary_markdown(model)` call `GET /v1/models/{model}/summary` (Kaimei API 1.6.0);
+  against API 1.5 they raise `NotFoundError`. `client.models.case_study` and `case_study_markdown` still work,
+  against 1.5 as well, and now raise a `DeprecationWarning`. Its notebook card is headed "Summary" and links
+  to the dashboard's Summary tab, for `object` `model_summary` and for 1.5's `model_case_study`.
+
 ## 0.14.0 — 2026-11-27
 
 The new model calls below need Kaimei API 1.5.0; against an older API they raise `NotFoundError`.
