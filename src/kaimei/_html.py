@@ -633,7 +633,8 @@ def render(data: Mapping[str, Any]) -> str:
         "model": _model,
         "prediction": _prediction,
         "analysis": _analysis,
-        "model_case_study": _case_study,
+        "model_summary": _model_summary,
+        "model_case_study": _model_summary,  # its name in API 1.5.0
         "monitoring": _monitoring,
         "population": _population,
         "comparison": _comparison,
@@ -648,11 +649,11 @@ def render(data: Mapping[str, Any]) -> str:
     return f"<style>{CSS}</style>{inline_styles(card, CSS)}"
 
 
-def _case_study(data: Mapping[str, Any]) -> str:
-    """A model's case study, compact: what it is, the facts, what each section says, and what is not on file."""
+def _model_summary(data: Mapping[str, Any]) -> str:
+    """A model's summary, compact: what it is, the facts, what each section says, and what is not on file."""
     model = _map(data.get("model"))
     plain = _plain  # the API sets the names of inputs and classes in backticks; a card shows them as plain words
-    out = [_head("Case study", model.get("slug"), _when(data, "generated ", key="generated_at"))]
+    out = [_head("Summary", model.get("slug"), _when(data, "generated ", key="generated_at"))]
     out.append(f'<div class="km-result"><span class="km-title">{_e(model.get("name") or "Model")}</span></div>')
     out.append(_say(data.get("headline")))
     facts = _dicts(data.get("facts"))
@@ -670,7 +671,7 @@ def _case_study(data: Mapping[str, Any]) -> str:
     if gaps:
         listed = "".join(f"<li><b>{_e(gap.get('title'))}.</b> {plain(gap.get('how'))}</li>" for gap in gaps)
         out.append(_details(f"What is not on file ({len(gaps)})", f"<ul>{listed}</ul>", open_=True))
-    link = _link(f"/models/{model['slug']}/case-study", "Open in dashboard") if model.get("slug") else ""
+    link = _link(f"/models/{model['slug']}/summary", "Open in dashboard") if model.get("slug") else ""
     out.append(_foot("written from what is stored; nothing was run", link))
     return "".join(out)
 

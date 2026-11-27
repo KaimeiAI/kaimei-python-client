@@ -246,7 +246,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         return similar_rows(data) if kind == "similar_cases" else holdings_rows(data)
     if kind == "comparison":
         return _comparison_rows(data), list(_COMPARISON_COLUMNS)
-    if kind == "model_case_study":
+    if kind in ("model_summary", "model_case_study"):  # the second is its name in API 1.5.0
         # One row per section, in the report's order: what it says, and whether it is on file.
         sections = [s for s in data.get("sections") or [] if isinstance(s, Mapping)]
         return [{column: s.get(column) for column in _REPORT_COLUMNS} for s in sections], list(_REPORT_COLUMNS)

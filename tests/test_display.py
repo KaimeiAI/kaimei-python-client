@@ -22,10 +22,10 @@ from kaimei._html import (
     short_date,
 )
 from kaimei._methods import summarize
-from test_case_study import REPORT
 from test_compare import COMPARISON
 from test_compare_methods import APPLICANT
 from test_compare_methods import _explanation as _method_explanation
+from test_model_summary import REPORT
 from test_similar_holdings import SIMILAR
 from test_tabular import FLIPPED, INSIGHTS, MODEL, PASSENGER, SHORT, _explanation
 
@@ -446,7 +446,7 @@ LOG_CARDS = {
     "similar_cases": (SIMILAR, "Of the 2 reference rows most like this case, 1 was labelled approve and 1 decline."),
     "model_holdings": (HOLDINGS, "Kaimei runs this model itself: it is one of Kaimei's own reference models (credit-risk), so no model of yours is involved."),
     "method_comparison": (METHODS, "They part on what matters most: KernelSHAP and Permutation Shapley say income, LIME says credit_score."),
-    "model_case_study": (REPORT, "A yes-or-no classifier that reads 9 inputs and decides between approve and decline."),
+    "model_summary": (REPORT, "A yes-or-no classifier that reads 9 inputs and decides between approve and decline."),
 }  # fmt: skip
 #: What each says of a record that holds nothing but its type.
 EMPTY_LEADS = {
@@ -456,7 +456,7 @@ EMPTY_LEADS = {
     "similar_cases": "No reference rows came back as like this case.",
     "model_holdings": "Nothing is listed for this model.",
     "method_comparison": "There is nothing to compare: fewer than two methods explained this input.",
-    "model_case_study": None,
+    "model_summary": None,
 }
 MARKUP = '"><script>alert(1)</script><img src=x onerror=alert(2)>'
 

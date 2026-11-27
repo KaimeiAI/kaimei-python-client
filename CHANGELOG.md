@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.1 — 2026-11-27
+
+### Changed
+
+- **A model's case study is now its summary.** `client.models.summary(model)` and
+  `client.models.summary_markdown(model)` call `GET /v1/models/{model}/summary` (Kaimei API 1.5.1);
+  against API 1.5.0 they raise `NotFoundError`. `client.models.case_study` and `case_study_markdown` still work,
+  against 1.5.0 as well, and now raise a `DeprecationWarning`. Its notebook card is headed "Summary" and links
+  to the dashboard's Summary tab, for `object` `model_summary` and for 1.5.0's `model_case_study`.
+
 ## 0.14.0 — 2026-11-27
 
 The new model calls below need Kaimei API 1.5.0; against an older API they raise `NotFoundError`.

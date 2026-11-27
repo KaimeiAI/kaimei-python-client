@@ -341,8 +341,8 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/holdings")
 
-    def case_study(self, model: str):
-        """A model written up as a case study, from what Kaimei already holds about it.
+    def summary(self, model: str):
+        """A model summed up, from what Kaimei already holds about it.
 
         ``headline`` says what the model is, ``facts`` are the key numbers, and ``sections`` are always the same
         ten in order: ``overview``, ``drivers``, ``behaviour``, ``interactions``, ``example`` (one stored
@@ -351,19 +351,32 @@ class Models(Resource):
         from the numbers, a ``status`` (``ready``, ``stale`` when its insight is older than 30 days, or
         ``missing``), ``applies`` (false when this kind of model cannot have the section), a ``table`` of its key
         numbers and the ``data`` a chart needs. ``gaps`` lists what is not on file and what would add it.
-        ``kaimei.display.rows(study)`` and ``study.to_frame()`` give one row per section.
+        ``kaimei.display.rows(summary)`` and ``summary.to_frame()`` give one row per section.
 
         Nothing is run and nothing is stored: the model is not called and no analysis is started, so this
-        works for any model and counts against no limit. ``case_study_markdown`` gives the same as text.
+        works for any model and counts against no limit. ``summary_markdown`` gives the same as text. It needs API
+        1.5.1; 1.5.0 has it only as the case study (``case_study``).
         """
-        return self._get(f"/v1/models/{model}/case-study")
+        return self._get(f"/v1/models/{model}/summary")
 
-    def case_study_markdown(self, model: str) -> str:
-        """The model's case study (see ``case_study``) as a Markdown document, ready for a wiki or a model card.
+    def summary_markdown(self, model: str) -> str:
+        """The model's summary (see ``summary``) as a Markdown document, ready for a wiki or a model card.
 
         A title, the facts as a table, a heading per section with its sentences and a table of its key numbers,
         and the list of what is not on file. It holds no HTML.
         """
+        raw = self._client._request("GET", f"/v1/models/{model}/summary", params={"format": "markdown"}, raw=True)
+        return bytes(raw).decode("utf-8")
+
+    def case_study(self, model: str):
+        """Deprecated: use ``summary``. The same, at the path API 1.5.0 gave it, so it also works against 1.5.0;
+        its ``object`` is ``model_case_study``."""
+        warnings.warn("models.case_study is now models.summary", DeprecationWarning, stacklevel=2)
+        return self._get(f"/v1/models/{model}/case-study")
+
+    def case_study_markdown(self, model: str) -> str:
+        """Deprecated: use ``summary_markdown``. The same, at the path API 1.5.0 gave it."""
+        warnings.warn("models.case_study_markdown is now models.summary_markdown", DeprecationWarning, stacklevel=2)
         raw = self._client._request("GET", f"/v1/models/{model}/case-study", params={"format": "markdown"}, raw=True)
         return bytes(raw).decode("utf-8")
 
