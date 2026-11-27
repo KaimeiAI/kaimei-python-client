@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Needs the Kaimei API release that adds them; an older API answers as it did and leaves `detail` out.
+
+### Added
+
+- `client.models.monitoring` reads a history other ways: `compare="window"` (each window's check reads only the
+  rows logged in it), `baseline_since` / `baseline_until` (compare with a stretch of logged traffic instead of the
+  reference data), `segment` with `segment_value` or `segment_low` / `segment_high` (drift within one slice of the
+  traffic, on both sides), and `bins` (how finely the drawn input's shape is counted).
+- `client.models.monitoring(model, detail=True)` adds `detail`: per input and window the two-sample tests (KS for a
+  number, chi-square for a category) with the `alpha` one input is held to, the size of the shift (Wasserstein,
+  Jensen-Shannon, mean shift), the share outside the reference and the data quality of the rows logged; the drawn
+  input's quantiles and its PSI bin by bin; what the model said and how right it was per window; and how the inputs
+  move together (rank correlations between pairs, and a reconstruction error).
+
 ## 0.14.0 — 2026-11-27
 
 The new model calls below need Kaimei API 1.5.0; against an older API they raise `NotFoundError`.

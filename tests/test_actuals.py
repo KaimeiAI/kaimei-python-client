@@ -1,5 +1,6 @@
 import json
 import math
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -126,6 +127,44 @@ def test_monitoring_sends_its_parameters_and_leaves_out_an_unchosen_input():
     assert report.tape.points[0][2] == 61.7
     client.models.monitoring("load", window="hour", days=3, feature="temperature", trailing=200, points=0)
     assert seen[-1][1] == {"window": "hour", "days": "3", "feature": "temperature", "trailing": "200", "points": "0"}
+
+
+def test_monitoring_can_be_read_against_a_logged_baseline_within_a_segment_in_detail():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"object": "monitoring", "series": [], "detail": {"inputs": ["income"]}})
+
+    client = _client(handler)
+    report = client.models.monitoring(
+        "load",
+        detail=True,
+        compare="window",
+        baseline_since=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        baseline_until="2026-11-08T00:00:00Z",
+        segment="home_ownership",
+        segment_value="rent",
+        bins=60,
+    )
+    assert seen[-1] == {
+        "window": "day",
+        "days": "30",
+        "trailing": "500",
+        "points": "1500",
+        "detail": "true",
+        "compare": "window",
+        "baseline_since": "2026-11-01T00:00:00+00:00",
+        "baseline_until": "2026-11-08T00:00:00Z",
+        "segment": "home_ownership",
+        "segment_value": "rent",
+        "bins": "60",
+    }
+    assert report.detail.inputs == ["income"]
+    client.models.monitoring("load", segment="holiday", segment_value=True)
+    assert seen[-1]["segment_value"] == "yes"
+    client.models.monitoring("load", segment="income", segment_low=50000)
+    assert seen[-1]["segment_low"] == "50000" and "segment_high" not in seen[-1]
 
 
 def test_population_sends_its_parameters_and_reads_as_one_row_per_prediction():

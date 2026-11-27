@@ -5,6 +5,7 @@ import numbers
 import os
 import re
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import (
     Any,
@@ -244,6 +245,15 @@ class Models(Resource):
         feature: Optional[str] = None,
         trailing: int = 500,
         points: int = 1500,
+        detail: bool = False,
+        compare: str = "latest",
+        baseline_since: Optional[Union[str, datetime]] = None,
+        baseline_until: Optional[Union[str, datetime]] = None,
+        segment: Optional[str] = None,
+        segment_value: Optional[Any] = None,
+        segment_low: Optional[float] = None,
+        segment_high: Optional[float] = None,
+        bins: int = 24,
     ):
         """What was logged for a model over the last ``days``, and what a drift check would have found along it.
 
@@ -260,10 +270,47 @@ class Models(Resource):
 
         Nothing is run and nothing is stored. Drift needs reference data and inputs that are single values (a table);
         without them ``drift_unavailable`` says why and the traffic is still returned.
+
+        Other ways to read it: ``compare="window"`` has each window's check read only the rows logged in
+        it. ``baseline_since`` and ``baseline_until`` compare with the traffic logged in that stretch instead of the
+        reference data. ``segment`` keeps only the rows, on both sides, whose input of that name holds
+        ``segment_value`` (a category's level, or yes or no) or lies from ``segment_low`` up to ``segment_high``.
+        ``bins`` is how finely the drawn input's shape is counted.
+
+        ``detail=True`` adds ``detail``, aligned with ``series``: per input and window the two-sample tests (``ks`` and
+        ``ks_p`` for a number, ``chi2`` and ``chi2_p`` for a category, with ``alpha``, the p-value one input is held
+        to), the size of the shift (``wasserstein``, ``wasserstein_std``, ``js``, ``mean_shift``), the share outside the
+        reference (``outside``) and the data quality of the rows logged (``quality``); the drawn input's quantiles and
+        its PSI bin by bin (``profile``); what the model said and how right it was per window (``outputs``,
+        ``performance``); and how the inputs move together (``correlations``, ``multivariate``).
         """
+        if isinstance(baseline_since, datetime):
+            baseline_since = baseline_since.isoformat()
+        if isinstance(baseline_until, datetime):
+            baseline_until = baseline_until.isoformat()
+        if isinstance(segment_value, bool):
+            segment_value = "yes" if segment_value else "no"
         return self._get(
             f"/v1/models/{model}/monitoring",
-            compact({"window": window, "days": days, "feature": feature, "trailing": trailing, "points": points}),
+            compact(
+                {
+                    "window": window,
+                    "days": days,
+                    "feature": feature,
+                    "trailing": trailing,
+                    "points": points,
+                    # Only what differs from the API's defaults, so a request to an older API reads as it did.
+                    "detail": True if detail else None,
+                    "compare": compare if compare != "latest" else None,
+                    "baseline_since": baseline_since,
+                    "baseline_until": baseline_until,
+                    "segment": segment,
+                    "segment_value": None if segment_value is None else str(segment_value),
+                    "segment_low": segment_low,
+                    "segment_high": segment_high,
+                    "bins": bins if bins != 24 else None,
+                }
+            ),
         )
 
     def population(self, model: str, *, days: int = 30, limit: int = 2000):
