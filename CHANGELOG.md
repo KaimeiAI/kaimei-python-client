@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.0 — 2026-11-26
+## 0.14.0 — 2026-11-27
 
 The new model calls below need Kaimei API 1.5.0; against an older API they raise `NotFoundError`.
 `explanations.compare_methods` uses only calls that already existed, and everything else works as it did.
