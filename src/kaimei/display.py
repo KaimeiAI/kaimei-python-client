@@ -117,6 +117,8 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     - a performance report: one row per window;
     - a monitoring history: one row per window, with each input's PSI as a ``drift.<input>`` column;
     - a population: one row per logged prediction, with a column per field holding the row's group;
+    - similar cases: one row per case, nearest first, with what is known about it and an ``input:<name>``
+      column per input; what Kaimei holds for a model: one row per item;
     - a comparison: one row per row both models answered, with each one's value and decision, the gap
       between them and an ``input:<name>`` column per input;
     - a model report: one row per section, with its status and its summary;
@@ -144,6 +146,10 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         return windows, list(_MONITORING_COLUMNS)
     if kind == "population":
         return _population_rows(data), list(_POPULATION_COLUMNS)
+    if kind in ("similar_cases", "model_holdings"):
+        from ._cases import holdings_rows, similar_rows
+
+        return similar_rows(data) if kind == "similar_cases" else holdings_rows(data)
     if kind == "comparison":
         return _comparison_rows(data), list(_COMPARISON_COLUMNS)
     if kind == "model_report":

@@ -282,6 +282,64 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/population", {"days": days, "limit": limit})
 
+    def similar(
+        self,
+        model: str,
+        input: Optional[Mapping[str, Any]] = None,
+        prediction_id: Optional[str] = None,
+        *,
+        k: int = 10,
+        source: str = "reference",
+    ):
+        """The rows Kaimei already holds that are most like one case, and what was true of them.
+
+        The case is ``input`` (its inputs) or ``prediction_id`` (a logged prediction); one of the two. It is
+        compared with the model's reference rows (``source="reference"``) or its newest 2,000 logged
+        predictions (``source="predictions"``), and the ``k`` nearest (50 at most) come back as ``cases``,
+        nearest first. Each has ``id`` (a reference row's position, or a prediction's id), ``distance``,
+        ``similarity`` (one less the distance), its ``inputs``, each input's own ``gaps`` and the inputs it
+        ``differs`` on most, with both values. A reference row carries its ``label``; a logged prediction its
+        ``output``, the class ``predicted``, its ``value`` and its recorded ``outcome``. ``summary`` counts
+        those per class (or gives the mean and range of numbers) and says it in a ``sentence``: "Of the 10
+        reference rows most like this case, 7 were labelled decline and 3 approve."
+        ``kaimei.display.rows(similar)`` and ``similar.to_frame()`` give one row per case, with an
+        ``input:<name>`` column per input.
+
+        Two rows are compared input by input: a number by its gap in units of the width of the middle nine
+        tenths of the reference rows' values (at most 1), a category or a yes/no by whether they match, and
+        a value missing on one side only as far as can be. The distance is the mean over the inputs, each
+        weighing the same. A value that is ``None`` or NaN is missing.
+
+        Nothing is run and nothing is stored, so a key that only reads can call it. A model whose inputs are
+        not all single values (a picture, a text, a series) answers ``422``.
+        """
+        if (input is None) == (prediction_id is None):
+            raise ValueError("Pass either input (the case's inputs) or prediction_id (a logged prediction).")
+        row = None
+        if input is not None:
+            # A gap in a table is NaN there and null on the wire: the value is missing.
+            row = {str(key): (None if isinstance(value, float) and value != value else value) for key, value in dict(input).items()}
+        return self._post(
+            f"/v1/models/{model}/similar",
+            compact({"input": row, "prediction_id": prediction_id, "k": k, "source": source}),
+        )
+
+    def holdings(self, model: str):
+        """What Kaimei holds for a model and what stays with you, read from what is stored.
+
+        ``runs`` says who runs the model (``by``: ``kaimei``, ``your_endpoint``, ``your_agent`` or ``nobody``)
+        in a ``sentence``. ``items`` covers the weights and structure, the input and output schema, reference
+        rows, logged predictions, recorded outcomes, explanations, insights and whether a credential for your
+        endpoint is held (never its value); each has ``held`` (``yes``, ``partly`` or ``no``), a ``count`` in
+        its ``unit``, the ``bytes`` stored where that is measured, and a ``detail``. ``crosses`` says what
+        travels between your network and Kaimei ``when`` a prediction, an explanation or an analysis is asked
+        for and when a prediction is logged. ``kaimei.display.rows(holdings)`` and ``holdings.to_frame()``
+        give one row per item.
+
+        Nothing is run and nothing is stored: counts and sizes are asked of the database.
+        """
+        return self._get(f"/v1/models/{model}/holdings")
+
     def report(self, model: str):
         """A model written up as a case study, from what Kaimei already holds about it.
 
@@ -321,8 +379,9 @@ class Models(Resource):
         with each model's value and decision, the ``gap`` and an ``input:<name>`` column per input.
 
         The two must take the same inputs and both predict a number or one of the same classes; otherwise the
-        API answers ``422`` and says what differs. Both models are run and nothing is stored. It counts as
-        starting an analysis does: the same hourly allowance, and refused once the month's analyses are used up.
+        API answers ``422`` and says what differs. Both models are run and nothing is stored, so a key
+        that only reads can call it (with ``source="predictions"`` it must be able to read predictions). It has
+        hourly and daily allowances of its own and is refused once the month's analyses are used up.
         To see why the two answer a row as they do, explain that row with each (``client.explanations.create``).
         """
         return self._get(f"/v1/models/{model}/comparison", {"with": other, "source": source, "limit": limit})

@@ -20,6 +20,19 @@ after 1.3.1); an older API answers 404.
   fields they can be grouped by (inputs, metadata keys, what was predicted, what happened) ranked by how far each
   separates the model's answers. `kaimei.display.rows(population)` and `population.to_frame()` give one row per
   prediction with a column per field, ready for `groupby`.
+- `client.models.similar(model, input=None, prediction_id=None, k=10, source="reference")`: the rows Kaimei
+  already holds that are most like one case (its inputs, or a logged prediction), from the model's reference rows
+  or its newest logged predictions (`source="predictions"`), nearest first, with what is known about each (a
+  reference row's label; a logged prediction's answer and recorded outcome), the inputs each differs on most, and
+  a `summary` that counts them and says it in a sentence (`POST /v1/models/{model}/similar`, in the same API
+  release). Nothing is run and nothing is stored. `kaimei.display.rows(similar)` and `similar.to_frame()` give one
+  row per case with an `input:<name>` column per input.
+- `client.models.holdings(model)`: what Kaimei holds for a model and what stays with you, read from what is
+  stored (`GET /v1/models/{model}/holdings`, in the same API release): who runs the model, each thing Kaimei
+  could hold (weights and structure, schema, reference rows, logged predictions, outcomes, explanations, insights,
+  a credential for your endpoint) with `held`, a `count`, `bytes` and a `detail`, and what crosses between your
+  network and Kaimei when a prediction, an explanation or an analysis is asked for.
+  `kaimei.display.rows(holdings)` and `holdings.to_frame()` give one row per item.
 - `client.models.report(model)`: a model written up as a case study from what Kaimei already holds about it
   (`GET /v1/models/{model}/report`, in the same API release): a `headline`, the key `facts`, ten `sections`
   each with a `summary` built from the numbers, a `status` (`ready`, `stale` or `missing`) and the data a chart
@@ -32,7 +45,16 @@ after 1.3.1); an older API answers 404.
   the correlation and gap between their answers, each one's accuracy and AUC (or MAE and R²) where the truth is
   known, the rows they differ on most and, when both have it stored, their global importance side by side.
   `kaimei.display.rows(comparison)` and `comparison.to_frame()` give one row per row compared, with each model's
-  value and decision, the `gap` and an `input:<name>` column per input. It counts as starting an analysis does.
+  value and decision, the `gap` and an `input:<name>` column per input. It is a read, with an hourly allowance of its own.
+- `client.explanations.compare_methods(model, input, methods=None)`: one input explained once with each method
+  the model lists (`explain_methods`, without `auto`), and what the methods say together. It loops
+  `explanations.create`, so each method is one explanation of the month's allowance; no prediction is logged
+  (`prediction_id=` attaches them all to one already in the log, `options=` goes to every call). The answer has
+  the `explanations`, an `agreement` (a `sentence` that follows the numbers, such as "All three put credit_score
+  first and agree on the top three.", Spearman's `rank_correlation` averaged over the pairs of methods, the input
+  each puts `first`, the inputs they push `opposed` ways), `rows` (one per input any method ranks in its top
+  `top=5`, with each method's attribution and rank) and `costs` (each method's `n_evals`, `latency_ms` and whether
+  it is `exact`). It works with any API that has the methods; nothing new is asked of the server.
 
 ### Changed
 

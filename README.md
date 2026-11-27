@@ -620,6 +620,11 @@ client.predictions.create(model="credit-risk-v3", input={...}, output={"score": 
 # Explain one input. method is "shap" (KernelSHAP), "shapley", or "lime".
 client.explanations.create(model="credit-risk-v3", input={...}, method="shap")
 
+# The same input explained with every method the model lists (one explanation each, no prediction logged)
+comparison = client.explanations.compare_methods("credit-risk-v3", {...})
+comparison.agreement.sentence     # "All three put credit_score first and agree on the top three."
+comparison.agreement.rank_correlation, [(c.label, c.n_evals, c.latency_ms, c.exact) for c in comparison.costs]
+
 # Outcomes come back later: attach what really happened to the logged predictions
 prediction = client.predictions.create(model="credit-risk-v3", input={...}, output={"label": "approve", "probability": 0.81})
 client.predictions.log_actual(prediction.id, "default")
@@ -639,6 +644,20 @@ history = client.models.monitoring("credit-risk-v3", window="day", days=30)
 population = client.models.population("credit-risk-v3", days=30)
 [(field.name, field.separation) for field in population.fields[:3]]
 population.to_frame().groupby("input:home_ownership")["value"].mean()
+
+# The reference rows most like one applicant, and what was true of them (nothing is run)
+similar = client.models.similar("credit-risk-v3", {"income": 52000, "credit_score": 640, "utilization": 0.71,
+    "debt_to_income": 0.41, "loan_amount": 21000, "employment_years": 2, "num_delinquencies": 1, "age": 31,
+    "home_ownership": "rent"})
+similar.summary.sentence          # "Of the 10 reference rows most like this case, 7 were labelled decline and 3 approve."
+[(case.id, case.similarity, case.label, [d.feature for d in case.differs]) for case in similar.cases]
+client.models.similar("credit-risk-v3", prediction_id="pred_…", source="predictions")  # among logged predictions
+
+# What Kaimei holds for a model and what stays with you, from the stored state
+holdings = client.models.holdings("credit-risk-v3")
+holdings.runs.sentence
+[(item.label, item.held, item.count, item.bytes) for item in holdings.items]
+[(crossing.when, crossing.what) for crossing in holdings.crosses]
 
 # The model as one readable case study, written from what is already stored (nothing is run)
 report = client.models.report("credit-risk-v3")
