@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 — 2026-11-26
 
-Needs the Kaimei API release that adds `/v1/decisions`: deploy the API first. Against an older API these calls
-raise `NotFoundError`; everything else works as it did.
+Everything below needs Kaimei API 1.4.0. Against an older API these calls raise `NotFoundError`; everything else
+works as it did.
 
 ### Added
 

@@ -645,6 +645,8 @@ Dashboard sign-in (session token) is also supported via `client.auth.login(...)`
 
 ## Decision records, for risk, compliance and legal
 
+Everything in this section needs Kaimei API 1.4.0 or later (`client.health().version` says which you have).
+
 A decision is a logged prediction, known by the id you logged it under. Its record says how the model reached
 it in sentences that can be filed: the outcome and the rule behind it, each input's effect, what would have
 changed the outcome, how it was computed and whether it can be reproduced, and what a record cannot show.
