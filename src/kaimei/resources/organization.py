@@ -14,8 +14,13 @@ class Organization(Resource):
     def retrieve(self):
         return self._get("/v1/organization")
 
-    def update(self, *, name: Optional[str] = None, settings: Optional[Mapping[str, Any]] = None):
-        return self._patch("/v1/organization", compact({"name": name, "settings": dict(settings) if settings else None}))
+    def update(
+        self, *, name: Optional[str] = None, slug: Optional[str] = None, settings: Optional[Mapping[str, Any]] = None
+    ):
+        """Rename the organization, give it a new ``slug`` (owners only; no other organization may have it), or
+        change its settings. Sessions and keys keep working after a new slug; anything naming the old one must change."""
+        body = {"name": name, "slug": slug, "settings": dict(settings) if settings else None}
+        return self._patch("/v1/organization", compact(body))
 
     def overview(self):
         return self._get("/v1/organization/overview")
