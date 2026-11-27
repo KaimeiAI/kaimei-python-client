@@ -593,7 +593,7 @@ def _plot_drift(insight: Any, *, model: Any, max_items: int, ice: bool) -> Any:
         note += f" The predictions themselves: PSI {float(output_drift.get('psi', 0.0)):.3f} ({output_drift.get('status')})."
     if payload.get("beyond_chance") is False and payload.get("chance") is not None:
         note += f" As many rows drawn from the reference data itself score up to {float(payload['chance']):.2f}: at or under that is chance."
-    # A bar the reference data's own sampling can reach is drawn without a verdict's colour (API after 1.3.1).
+    # A bar the reference data's own sampling can reach is drawn without a verdict's colour (API 1.4.0).
     told = [not (f.get("beyond_chance") is False and status != "stable") for f, status in zip(features, statuses)]
     fig, ax = _bars_figure(insight, names, note)
     for index, (value, status) in enumerate(zip(psi, statuses)):

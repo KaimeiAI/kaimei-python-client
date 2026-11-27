@@ -458,7 +458,7 @@ An agent answers one job at a time, and a request waits for it up to the model's
 
 ### Results in a notebook
 
-A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an analysis, or a page of them) shows as a Kaimei card: the mark, the dashboard's colours and the dashboard's numbers, formatted by the same rules. An explanation card has the prediction, the attribution bars (hover a bar for its full precision), the probabilities, the counterfactual, and the input and JSON behind collapsible sections; an image explanation adds the photo, the evidence heatmap and the focus, with its regions. Insight cards draw importance shares, drift by status, behaviour curves, the output histogram and the learned rules the way the dashboard's cards do. The cards are plain HTML and CSS, so they render in JupyterLab, classic Jupyter, VS Code and Colab, follow the host's dark theme, and link back to the record in the dashboard. Each element also carries its style inline, so a notebook committed with its outputs keeps the cards' layout on GitHub, whose viewer drops `<style>` blocks (there they show in the light theme).
+A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an analysis, a page of them, or one of the readings of a model's log named below) shows as a Kaimei card: the mark, the dashboard's colours and the dashboard's numbers, formatted by the same rules. An explanation card has the prediction, the attribution bars (hover a bar for its full precision), the probabilities, the counterfactual, and the input and JSON behind collapsible sections; an image explanation adds the photo, the evidence heatmap and the focus, with its regions. Insight cards draw importance shares, drift by status, behaviour curves, the output histogram and the learned rules the way the dashboard's cards do. What a model's log says has cards too, and each leads with the sentence a person would say about it, then the few numbers behind it: a monitoring history (`models.monitoring`: the latest window's reading, one bar per window, the inputs by peak PSI), a population (`models.population`: the field that separates the answers most, and its groups), a comparison of two models (`models.compare`: how far they agree, each one's score, the rows they differ on most), similar cases (`models.similar`), what Kaimei holds for a model (`models.holdings`: what stays with you beside what Kaimei holds), a model report (`models.report`) and several explanation methods on one input (`explanations.compare_methods`: each method's top three inputs on one scale, with its cost). The cards are plain HTML and CSS, so they render in JupyterLab, classic Jupyter, VS Code and Colab, follow the host's dark theme, and link back to the record in the dashboard. Each element also carries its style inline, so a notebook committed with its outputs keeps the cards' layout on GitHub, whose viewer drops `<style>` blocks (there they show in the light theme).
 
 ```python
 explanation = client.explanations.create(model="titanic-forest", input=passenger, method="shap")
@@ -660,10 +660,10 @@ holdings.runs.sentence
 [(crossing.when, crossing.what) for crossing in holdings.crosses]
 
 # The model as one readable case study, written from what is already stored (nothing is run)
-report = client.models.report("credit-risk-v3")
-[(section.title, section.status, section.summary) for section in report.sections]
-[gap.title for gap in report.gaps]  # what is not on file, and gap.how says what would add it
-open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.report_markdown("credit-risk-v3"))
+study = client.models.case_study("credit-risk-v3")
+[(section.title, section.status, section.summary) for section in study.sections]
+[gap.title for gap in study.gaps]  # what is not on file, and gap.how says what would add it
+open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.case_study_markdown("credit-risk-v3"))
 
 # Two models on the same rows (two versions, or a champion and a challenger): do they agree, and where not?
 both = client.models.compare("loan-forest-v1", "loan-scorecard-v1")

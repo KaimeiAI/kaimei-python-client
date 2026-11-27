@@ -340,7 +340,7 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/holdings")
 
-    def report(self, model: str):
+    def case_study(self, model: str):
         """A model written up as a case study, from what Kaimei already holds about it.
 
         ``headline`` says what the model is, ``facts`` are the key numbers, and ``sections`` are always the same
@@ -350,20 +350,20 @@ class Models(Resource):
         from the numbers, a ``status`` (``ready``, ``stale`` when its insight is older than 30 days, or
         ``missing``), ``applies`` (false when this kind of model cannot have the section), a ``table`` of its key
         numbers and the ``data`` a chart needs. ``gaps`` lists what is not on file and what would add it.
-        ``kaimei.display.rows(report)`` and ``report.to_frame()`` give one row per section.
+        ``kaimei.display.rows(study)`` and ``study.to_frame()`` give one row per section.
 
         Nothing is run and nothing is stored: the model is not called and no analysis is started, so this
-        works for any model and counts against no limit. ``report_markdown`` gives the same report as text.
+        works for any model and counts against no limit. ``case_study_markdown`` gives the same as text.
         """
-        return self._get(f"/v1/models/{model}/report")
+        return self._get(f"/v1/models/{model}/case-study")
 
-    def report_markdown(self, model: str) -> str:
-        """The model's report (see ``report``) as a Markdown document, ready for a wiki or a model card.
+    def case_study_markdown(self, model: str) -> str:
+        """The model's case study (see ``case_study``) as a Markdown document, ready for a wiki or a model card.
 
         A title, the facts as a table, a heading per section with its sentences and a table of its key numbers,
         and the list of what is not on file. It holds no HTML.
         """
-        raw = self._client._request("GET", f"/v1/models/{model}/report", params={"format": "markdown"}, raw=True)
+        raw = self._client._request("GET", f"/v1/models/{model}/case-study", params={"format": "markdown"}, raw=True)
         return bytes(raw).decode("utf-8")
 
     def compare(self, model: str, other: str, *, source: str = "reference", limit: int = 500):
@@ -405,7 +405,7 @@ class Models(Resource):
 
         ``sample_labels`` holds the label stored with each of those rows, in the same order, and ``None`` for a
         row stored without one, so ``zip(summary.sample, summary.sample_labels)`` pairs each row with what
-        happened. An API before the release after 1.3.1 sends no ``sample_labels``.
+        happened. An API before 1.4.0 sends no ``sample_labels``.
         """
         return self._get(f"/v1/models/{model}/reference-data", {"sample": sample})
 

@@ -4,7 +4,9 @@ A record the client returns (an explanation, an insight, a model, a page of pred
 shown in a Jupyter cell the way its dashboard card reads: the Kaimei mark, the dashboard's colours,
 the same numbers formatted the same way, with hover details and collapsible sections. Nothing in
 the card needs a script, so it renders in JupyterLab, classic Jupyter, VS Code and Colab, and it
-follows the host's dark theme.
+follows the host's dark theme. A monitoring history, a population, a comparison of two models,
+similar cases, what Kaimei holds for a model and a comparison of explanation methods each lead with
+the sentence that says what was found, then the numbers behind it.
 
 Three ways to get the plain data instead::
 
@@ -84,7 +86,12 @@ def mimebundle(record: Any) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         text = json.dumps(data, indent=2, default=str, ensure_ascii=False)
         root = str(data.get("object"))
         return {"application/json": data, "text/plain": text}, {"application/json": {"expanded": True, "root": root}}
-    return {"text/html": html(data), "text/plain": repr(record)}, {}
+    try:
+        card = html(data)
+    except Exception:
+        # A record in a shape no card expects still shows: a cell never fails over how its result is drawn.
+        return {"text/plain": repr(record)}, {}
+    return {"text/html": card, "text/plain": repr(record)}, {}
 
 
 # --- tables ---------------------------------------------------------------------------------------
@@ -152,7 +159,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         return similar_rows(data) if kind == "similar_cases" else holdings_rows(data)
     if kind == "comparison":
         return _comparison_rows(data), list(_COMPARISON_COLUMNS)
-    if kind == "model_report":
+    if kind == "model_case_study":
         # One row per section, in the report's order: what it says, and whether it is on file.
         sections = [s for s in data.get("sections") or [] if isinstance(s, Mapping)]
         return [{column: s.get(column) for column in _REPORT_COLUMNS} for s in sections], list(_REPORT_COLUMNS)

@@ -1,14 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 — 2026-11-26
 
-Needs a Kaimei API with `GET /v1/models/{model}/monitoring` and `GET /v1/models/{model}/population` (the release
-after 1.3.1); an older API answers 404.
+Everything below needs Kaimei API 1.4.0. Against an older API these calls raise `NotFoundError`; everything else
+works as it did.
 
 ### Added
 
 - `client.models.reference_data(model, sample=...)` gives each sampled row's stored label beside it, as
-  `sample_labels` (the API after 1.3.1 sends it): one entry per row of `sample`, `None` where a row was stored
+  `sample_labels` (API 1.4.0 sends it): one entry per row of `sample`, `None` where a row was stored
   without a label. Nothing changed in the call; the method now says what it returns.
 - `client.models.monitoring(model, window="day", days=30, feature=None, trailing=500, points=1500)`: a model's
   logged traffic over time, with the drift a check would have found at the end of every hour, day or week, the
@@ -33,12 +33,12 @@ after 1.3.1); an older API answers 404.
   a credential for your endpoint) with `held`, a `count`, `bytes` and a `detail`, and what crosses between your
   network and Kaimei when a prediction, an explanation or an analysis is asked for.
   `kaimei.display.rows(holdings)` and `holdings.to_frame()` give one row per item.
-- `client.models.report(model)`: a model written up as a case study from what Kaimei already holds about it
-  (`GET /v1/models/{model}/report`, in the same API release): a `headline`, the key `facts`, ten `sections`
+- `client.models.case_study(model)`: a model written up as a case study from what Kaimei already holds about
+  it (`GET /v1/models/{model}/case-study`, in the same API release): a `headline`, the key `facts`, ten `sections`
   each with a `summary` built from the numbers, a `status` (`ready`, `stale` or `missing`) and the data a chart
   needs, and `gaps`, what is not on file and what would add it. Nothing is run and nothing counts against a
-  limit. `client.models.report_markdown(model)` returns the same report as a Markdown document with no HTML.
-  In a notebook a report shows as a card, and `kaimei.display.rows(report)` and `report.to_frame()` give one
+  limit. `client.models.case_study_markdown(model)` returns the same as a Markdown document with no HTML.
+  In a notebook a case study shows as a card, and `kaimei.display.rows(study)` and `study.to_frame()` give one
   row per section.
 - `client.models.compare(model, other, source="reference", limit=500)`: two models that take the same inputs, run
   on the same rows (`GET /v1/models/{model}/comparison`, in the same API release): how often they decide alike,
@@ -55,8 +55,30 @@ after 1.3.1); an older API answers 404.
   each puts `first`, the inputs they push `opposed` ways), `rows` (one per input any method ranks in its top
   `top=5`, with each method's attribution and rank) and `costs` (each method's `n_evals`, `latency_ms` and whether
   it is `exact`). It works with any API that has the methods; nothing new is asked of the server.
+- The records these calls return show as Kaimei cards when they end a notebook cell, as an explanation does. Each
+  leads with the sentence a person would say about it, then the few numbers behind it, one small picture and a
+  link to the model's page in the dashboard. Like the other cards they are plain elements styled inline (so they
+  keep their layout on GitHub), escape every name the API or you gave, follow `kaimei.set_display("raw")`, and
+  render what they can of an older or partial record.
+  - A monitoring history: the latest window's reading in words (stable, within chance, moderate or significant
+    drift) with the leading input's PSI beside its own chance level, one bar per window toned by its reading with
+    a line at each threshold, and the inputs ranked by peak PSI. A model with no drift reading draws its traffic.
+  - A population: how many predictions, the field that separates the answers most, and that field's groups with
+    their rows and the classes predicted in each as a split bar (the mean answer as a bar for a regression).
+  - A comparison of two models: how many rows they decide the same way (or how far their answers correlate), the
+    mean and largest gap, each model's score with the rows it is measured on, and the three rows they differ on
+    most with both answers drawn on one line.
+  - Similar cases: the summary sentence, then each case with a similarity bar, what is known of it (its label, or
+    what was predicted and the recorded outcome) and the inputs it differs on most beside the asked values.
+  - What Kaimei holds: who runs the model, then "Stays with you" beside "Held by Kaimei" with counts and sizes.
+  - A comparison of explanation methods: whether they agree, their rank agreement, and each method's top three
+    inputs as bars on one shared scale with its model calls, its time and whether it is exact.
 
 ### Changed
+
+- A model report's card leads with its headline in the same type as the other cards' opening sentence.
+- A record whose card cannot be drawn shows its plain representation in the cell (`<Kaimei monitoring>`) instead
+  of raising there. `kaimei.display.html(record)` still raises.
 
 - A drift insight whose score the reference data's own sampling can reach (the API's `beyond_chance: false`, after
   1.3.1) is shown as `within chance` in a notebook, and its bars are drawn without a verdict's colour. Insights
