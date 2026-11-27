@@ -2093,7 +2093,7 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
             chips.append(_badge(f"{metric['name']} {fmt_number(metric.get('value'), 3)}", mono=True, title="Model metric on the reference rows"))
         return _badges(chips) + _share_bars(rows)
     if kind == "drift":
-        # A score that rows drawn from the reference data itself can reach is not shown as drift (API 1.4.0).
+        # A score that rows drawn from the reference data itself can reach is not shown as drift (API 1.5.0).
         features = [
             (
                 str(f.get("feature")),

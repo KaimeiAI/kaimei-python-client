@@ -451,7 +451,7 @@ class Models(Resource):
 
         ``sample_labels`` holds the label stored with each of those rows, in the same order, and ``None`` for a
         row stored without one, so ``zip(summary.sample, summary.sample_labels)`` pairs each row with what
-        happened. An API before 1.4.0 sends no ``sample_labels``.
+        happened. An API before 1.5.0 sends no ``sample_labels``.
         """
         return self._get(f"/v1/models/{model}/reference-data", {"sample": sample})
 

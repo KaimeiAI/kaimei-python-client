@@ -636,16 +636,16 @@ report = client.models.performance("credit-risk-v3", window="week", days=90)
 # Has quality dropped by more than chance explains? Also part of every full analysis.
 client.analyses.create(model="credit-risk-v3", type="performance")
 
-# When did an input start to drift? What a drift check would have found at the end of every day, from the log
+# When did an input start to drift? What a drift check would have found at the end of every day, from the log (API 1.5.0)
 history = client.models.monitoring("credit-risk-v3", window="day", days=30)
 [(day.start, day.status, day.top_feature) for day in history.series if day.status == "significant"]
 
-# Every logged prediction as a row, and what separates the model's answers most
+# Every logged prediction as a row, and what separates the model's answers most (API 1.5.0)
 population = client.models.population("credit-risk-v3", days=30)
 [(field.name, field.separation) for field in population.fields[:3]]
 population.to_frame().groupby("input:home_ownership")["value"].mean()
 
-# The reference rows most like one applicant, and what was true of them (nothing is run)
+# The reference rows most like one applicant, and what was true of them (nothing is run; API 1.5.0)
 similar = client.models.similar("credit-risk-v3", {"income": 52000, "credit_score": 640, "utilization": 0.71,
     "debt_to_income": 0.41, "loan_amount": 21000, "employment_years": 2, "num_delinquencies": 1, "age": 31,
     "home_ownership": "rent"})
@@ -653,19 +653,19 @@ similar.summary.sentence          # "Of the 10 reference rows most like this cas
 [(case.id, case.similarity, case.label, [d.feature for d in case.differs]) for case in similar.cases]
 client.models.similar("credit-risk-v3", prediction_id="pred_…", source="predictions")  # among logged predictions
 
-# What Kaimei holds for a model and what stays with you, from the stored state
+# What Kaimei holds for a model and what stays with you, from the stored state (API 1.5.0)
 holdings = client.models.holdings("credit-risk-v3")
 holdings.runs.sentence
 [(item.label, item.held, item.count, item.bytes) for item in holdings.items]
 [(crossing.when, crossing.what) for crossing in holdings.crosses]
 
-# The model as one readable case study, written from what is already stored (nothing is run)
+# The model as one readable case study, written from what is already stored (nothing is run; API 1.5.0)
 study = client.models.case_study("credit-risk-v3")
 [(section.title, section.status, section.summary) for section in study.sections]
 [gap.title for gap in study.gaps]  # what is not on file, and gap.how says what would add it
 open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.case_study_markdown("credit-risk-v3"))
 
-# Two models on the same rows (two versions, or a champion and a challenger): do they agree, and where not?
+# Two models on the same rows (two versions, or a champion and a challenger): do they agree, and where not? (API 1.5.0)
 both = client.models.compare("loan-forest-v1", "loan-scorecard-v1")
 both.agreement.rate, [(m.name, s.auc) for m, s in zip(both.models, both.scores)]
 both.to_frame().sort_values("gap", ascending=False).head()  # the rows they answer most differently
