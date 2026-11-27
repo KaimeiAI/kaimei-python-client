@@ -788,6 +788,7 @@ def extract_structure(
         raise StructureError("on_unsupported must be 'draw' or 'error'.", code="invalid_structure", param="on_unsupported")
     if via not in ROUTES:
         raise StructureError("via must be 'auto', 'native' or 'onnx'.", code="invalid_structure", param="via")
+    _check_framework(estimator, framework)
     from . import graphs as _graphs
 
     estimator, scheduler = _graphs.unwrap_pipeline(estimator)
@@ -3659,6 +3660,39 @@ def _classification_head(layers: List[Dict[str, Any]], task: Optional[str], fina
 def _safe_id(name: str) -> str:
     cleaned = "".join(char if char.isalnum() or char in "_.-" else "_" for char in name)
     return cleaned or "layer"
+
+
+#: Frameworks a model object's own classes name beyond doubt. A scikit-learn wrapper can hold any other's model.
+_SURE_FRAMEWORKS = ("pytorch", "keras", "tensorflow", "xgboost", "lightgbm", "catboost")
+#: Frameworks that name the same models: ``keras`` for a TensorFlow model is no mistake, nor ``flax`` for JAX.
+_SAME_FRAMEWORKS = ({"keras", "tensorflow"}, {"jax", "flax"})
+#: Other words for a framework, as the API reads them.
+_FRAMEWORK_ALIASES = {"torch": "pytorch", "scikit-learn": "sklearn", "scikit_learn": "sklearn", "tf": "tensorflow",
+                      "tf.keras": "keras", "onnxruntime": "onnx", "transformers": "huggingface", "hf": "huggingface"}
+
+
+def _check_framework(estimator: Any, framework: Optional[str]) -> None:
+    """Refuse a ``framework`` that is not the one the model object itself is made in.
+
+    The structure carries the framework it is given, and the API takes a structure's framework as the model's, so a
+    wrong one would be kept. It is only checked where the object says beyond doubt (a PyTorch module, a Keras model,
+    an XGBoost, LightGBM or CatBoost model): anything else is taken as given.
+    """
+    if framework is None:
+        return
+    said = str(framework).strip().lower()
+    said = _FRAMEWORK_ALIASES.get(said, said)
+    detected = detect_framework(estimator)
+    if detected not in _SURE_FRAMEWORKS or said in ("", "custom", detected):
+        return
+    if any(said in group and detected in group for group in _SAME_FRAMEWORKS):
+        return
+    raise StructureError(
+        f"framework={framework!r} was given for a {detected} model ({type(estimator).__name__}). Leave framework "
+        "out, and it is read from the model.",
+        code="framework_mismatch",
+        param="framework",
+    )
 
 
 def detect_framework(estimator: Any) -> str:
