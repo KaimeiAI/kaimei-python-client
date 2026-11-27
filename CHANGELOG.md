@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `client.models.alpha(model, days=120, window=20, horizons=10, entity=None, date=None, segments=None,
+  factors=True)`: how well a return forecast ranked each date's universe (`GET /v1/models/{model}/alpha`, in
+  the API release that adds it): each date's rank IC, the ICIR, a decay check against the earlier dates and the
+  expected IC, the IC by horizon and its half-life, turnover, bucket returns, which inputs and families of inputs
+  have weakened or flipped, and the IC within segments. `kaimei.display.rows(alpha)` and `alpha.to_frame()` give
+  one row per date. Against an older API it raises `NotFoundError`.
+
 ## 0.14.0 — 2026-11-27
 
 The new model calls below need Kaimei API 1.5.0; against an older API they raise `NotFoundError`.

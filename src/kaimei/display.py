@@ -129,6 +129,7 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     - a performance report: one row per window;
     - a monitoring history: one row per window, with each input's PSI as a ``drift.<input>`` column;
     - a population: one row per logged prediction, with a column per field holding the row's group;
+    - an alpha analysis: one row per date, with its rank IC, the rolling mean beside it, hit rate and spread;
     - similar cases: one row per case, nearest first, with what is known about it and an ``input:<name>``
       column per input; what Kaimei holds for a model: one row per item;
     - a comparison: one row per row both models answered, with each one's value and decision, the gap
@@ -240,6 +241,16 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         return windows, list(_MONITORING_COLUMNS)
     if kind == "population":
         return _population_rows(data), list(_POPULATION_COLUMNS)
+    if kind == "alpha":
+        # One row per date, with the rolling mean beside the date's own IC; the bucket means stay in the record.
+        rolling = {p.get("date"): p.get("rank_ic") for p in data.get("rolling") or [] if isinstance(p, Mapping)}
+        days = []
+        for d in data.get("daily") or []:
+            if isinstance(d, Mapping):
+                row = {column: d.get(column) for column in _ALPHA_COLUMNS if column != "rolling_rank_ic"}
+                row["rolling_rank_ic"] = rolling.get(d.get("date"))
+                days.append(row)
+        return days, list(_ALPHA_COLUMNS)
     if kind in ("similar_cases", "model_holdings"):
         from ._cases import holdings_rows, similar_rows
 
@@ -251,6 +262,10 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         sections = [s for s in data.get("sections") or [] if isinstance(s, Mapping)]
         return [{column: s.get(column) for column in _REPORT_COLUMNS} for s in sections], list(_REPORT_COLUMNS)
     return [flatten(data)], []
+
+
+#: An alpha analysis's columns: one row per date.
+_ALPHA_COLUMNS = ("date", "rank_ic", "rolling_rank_ic", "ic", "hit_rate", "spread", "dispersion", "names", "with_outcomes")
 
 
 #: A model report's columns: one row per section.

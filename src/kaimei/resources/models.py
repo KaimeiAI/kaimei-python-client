@@ -283,6 +283,44 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/population", {"days": days, "limit": limit})
 
+    def alpha(
+        self,
+        model: str,
+        *,
+        days: int = 120,
+        window: int = 20,
+        horizons: int = 10,
+        entity: Optional[str] = None,
+        date: Optional[str] = None,
+        segments: Optional[Sequence[str]] = None,
+        factors: bool = True,
+    ):
+        """How well a return forecast ranked each date's universe, and whether that is holding up.
+
+        For a regression that scores many securities on each date (a model with ``outputs.alpha``, or any
+        regression when ``entity`` and ``date`` name the metadata keys that hold the security and the as-of
+        date), read from its logged forecasts and their outcomes. ``daily`` has each date's ``rank_ic``, ``ic``,
+        ``hit_rate`` and top-minus-bottom ``spread``; ``summary`` the mean rank IC, its spread, ``icir`` and
+        ``icir_annual``; ``decay`` checks the latest ``window`` dates against the dates before them and the
+        expected IC (``status`` is ``decaying``, ``stable``, ``improving`` or ``insufficient_data``);
+        ``horizons`` gives the IC ``horizons`` dates ahead and the ``half_life``; ``turnover``, ``quantiles``,
+        ``factors`` and ``families`` (each input's and each family's own IC, and which have ``weakened`` or
+        ``flipped``) and ``segments`` (the IC within groups of a metadata key) follow.
+        ``kaimei.display.rows(alpha)`` and ``alpha.to_frame()`` give one row per date.
+
+        Nothing is run and nothing is stored. Needs Kaimei API with ``GET /v1/models/{model}/alpha``.
+        """
+        params = {
+            "days": days,
+            "window": window,
+            "horizons": horizons,
+            "entity": entity,
+            "date": date,
+            "segments": ",".join(segments) if segments is not None else None,
+            "factors": "true" if factors else "false",
+        }
+        return self._get(f"/v1/models/{model}/alpha", compact(params))
+
     def similar(
         self,
         model: str,
