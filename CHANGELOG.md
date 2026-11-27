@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.0 — unreleased
+## 0.16.0 — 2026-11-27
 
 For Kaimei API 1.7.0, where a model's task and framework are Kaimei's to say. Against an older API every call works
 as it did.
