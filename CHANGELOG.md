@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.0 — unreleased
+
+For Kaimei API 1.7.0, where a model's task and framework are Kaimei's to say. Against an older API every call works
+as it did.
+
+### Changed
+
+- `framework=` that is not the framework the model object is made in is refused before anything is read or sent
+  (`StructureError`, `code="framework_mismatch"`), in `client.models.upload`, `upload_structure` and
+  `extract_structure`. It is checked where the object says beyond doubt (a PyTorch module, a Keras or TensorFlow
+  model, an XGBoost, LightGBM or CatBoost model), and `keras` and `tensorflow` are taken for each other. Leave it
+  out and it is read from the model, as before. A wrong one used to be written into the structure, and from API
+  1.7.0 a model takes its structure's framework.
+
+### Added
+
+- Documented on `client.models.update` and `upload_structure`: from API 1.7.0 a model's `task` and `framework` are
+  its structure's or built-in model's, and lock once it has logged predictions or explanations (`409 task_locked`,
+  `framework_locked`); a model's `detected_from` and `locked_fields` say which, and a new version starts unlocked.
+
 ## 0.15.0 — 2026-11-27
 
 For Kaimei API 1.6.0. Against an older API every call works as it did; the new ones say what they need below.

@@ -192,6 +192,13 @@ class Models(Resource):
         return self._iter("/v1/models", params)
 
     def update(self, model: str, **fields: Any):
+        """Change a model's registered fields (``name``, ``description``, ``tags``, ``outputs``, ...).
+
+        Its ``task`` and ``framework`` are Kaimei's to say from API 1.7.0: those of its structure, or of its built-in
+        model, and, for a model with neither, what it was registered with until its first logged prediction or
+        explanation. A change after that is refused (``409 task_locked`` or ``framework_locked``) and the model's
+        ``locked_fields`` say so; :meth:`create_version` starts a version with no history, where they can be set.
+        """
         return self._patch(f"/v1/models/{model}", compact(fields))
 
     def delete(self, model: str):
@@ -1139,6 +1146,12 @@ class Models(Resource):
 
         A graph (``family: "graph"``) needs Kaimei API 1.3.0. An API from before it refuses one, the model keeps
         the structure it had, and the error says which API is needed.
+
+        The model takes the structure's framework, and from API 1.7.0 its task too while it has no logged
+        predictions or explanations; a structure of another task for a model that has some is refused
+        (``409 task_locked``): upload it to a new version (:meth:`create_version`). ``framework`` that is not the
+        one the estimator is made in (a PyTorch module, a Keras model, an XGBoost, LightGBM or CatBoost model) is
+        refused before anything is sent (``framework_mismatch``); leave it out and it is read from the estimator.
         """
         labels = label_names(labels)  # a list, before anything reads names given as a generator
         _check_onnx_path(save_onnx)  # before anything is sent: a file that cannot be written is the caller's to fix
