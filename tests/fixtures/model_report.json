@@ -1,0 +1,604 @@
+{
+ "object": "model_report",
+ "generated_at": "2026-11-26T22:55:07.120907Z",
+ "organization": "Kaimei Demo",
+ "model": {
+  "id": "mdl_credit",
+  "name": "Credit risk scorer",
+  "slug": "credit-risk-v3",
+  "version": "3",
+  "task": "binary_classification",
+  "task_words": "a yes-or-no classifier",
+  "framework": "sklearn",
+  "status": "active",
+  "description": "Reference consumer-credit decline model. Non-linear with a utilization × debt-to-income leverage interaction and an accelerating sub-prime penalty.",
+  "tags": [
+   "demo",
+   "finance",
+   "tabular"
+  ],
+  "created_at": "2026-11-26T19:43:17.050352Z"
+ },
+ "runs": {
+  "type": "builtin",
+  "sentence": "It is one of Kaimei's built-in reference models, which Kaimei runs itself."
+ },
+ "output": {
+  "name": "decision",
+  "labels": [
+   "approve",
+   "decline"
+  ],
+  "positive_label": "decline",
+  "threshold": 0.5,
+  "unit": null,
+  "sentence": "It answers approve or decline: decline when its chance of decline is at or above 50%, and approve otherwise."
+ },
+ "inputs": [
+  {
+   "name": "income",
+   "label": "Annual gross income",
+   "type": "numeric",
+   "unit": "USD/yr",
+   "range": "0 or more",
+   "description": "Annual gross income"
+  },
+  {
+   "name": "credit_score",
+   "label": "Bureau credit score",
+   "type": "integer",
+   "unit": null,
+   "range": "300 to 850",
+   "description": "Bureau credit score"
+  },
+  {
+   "name": "utilization",
+   "label": "Revolving credit utilization ratio",
+   "type": "numeric",
+   "unit": null,
+   "range": "0 to 1.5",
+   "description": "Revolving credit utilization ratio"
+  },
+  {
+   "name": "debt_to_income",
+   "label": "Total monthly debt / monthly income",
+   "type": "numeric",
+   "unit": null,
+   "range": "0 to 2",
+   "description": "Total monthly debt / monthly income"
+  },
+  {
+   "name": "loan_amount",
+   "label": "Requested loan amount",
+   "type": "numeric",
+   "unit": "USD",
+   "range": "0 or more",
+   "description": "Requested loan amount"
+  },
+  {
+   "name": "employment_years",
+   "label": "Years with current employer",
+   "type": "numeric",
+   "unit": "years",
+   "range": "0 to 50",
+   "description": "Years with current employer"
+  },
+  {
+   "name": "num_delinquencies",
+   "label": "Delinquencies in the last 24 months",
+   "type": "integer",
+   "unit": null,
+   "range": "0 to 20",
+   "description": "Delinquencies in the last 24 months"
+  },
+  {
+   "name": "age",
+   "label": "Applicant age",
+   "type": "integer",
+   "unit": "years",
+   "range": "18 to 100",
+   "description": "Applicant age"
+  },
+  {
+   "name": "home_ownership",
+   "label": "Housing status",
+   "type": "categorical",
+   "unit": null,
+   "range": "rent, mortgage, own",
+   "description": "Housing status"
+  }
+ ],
+ "holdings": [
+  {
+   "key": "reference_data",
+   "label": "Reference data",
+   "status": "held",
+   "detail": "600 rows uploaded: the population explanations and drift compare against.",
+   "at": null
+  },
+  {
+   "key": "predictions",
+   "label": "Logged predictions",
+   "status": "held",
+   "detail": "196 predictions logged with time, input and output, the first 14 days ago and the latest today.",
+   "at": "2026-11-26T20:06:33.435582Z"
+  },
+  {
+   "key": "outcomes",
+   "label": "Realised outcomes",
+   "status": "held",
+   "detail": "173 logged predictions have the real outcome attached.",
+   "at": null
+  },
+  {
+   "key": "explanations",
+   "label": "Stored explanations",
+   "status": "held",
+   "detail": "18 explanations stored, the latest today.",
+   "at": "2026-11-26T20:08:18.432029Z"
+  },
+  {
+   "key": "decision_records",
+   "label": "Decision records",
+   "status": "held",
+   "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+   "at": "2026-11-26T20:08:18.432029Z"
+  },
+  {
+   "key": "analyses",
+   "label": "Stored analyses",
+   "status": "held",
+   "detail": "1 analysis stored with options, seed and model version, the latest today.",
+   "at": "2026-11-26T19:43:20.765578Z"
+  },
+  {
+   "key": "structure",
+   "label": "Model structure",
+   "status": "missing",
+   "detail": "No structure is uploaded, so the model's layers and weights are not held and cannot be exported.",
+   "at": null
+  }
+ ],
+ "findings": [
+  {
+   "type": "global_importance",
+   "name": "Global importance",
+   "title": "Global feature importance",
+   "summary": "`credit_score` is the most influential input, followed by `utilization` and `debt_to_income`. Together they carry 58% of the measured importance (permutation importance over 400 rows).",
+   "severity": "info",
+   "created_at": "2026-11-26T19:43:18.358476Z",
+   "status": "held",
+   "id": "ins_dcb270e6503a9366fb10"
+  },
+  {
+   "type": "learned_rules",
+   "name": "Learned rules",
+   "title": "What the model has learned",
+   "summary": "Higher `credit_score` decreases the probability of decline, most sharply between 563 and 612 (range 11% → 86%).",
+   "severity": "info",
+   "created_at": "2026-11-26T19:43:20.718814Z",
+   "status": "held",
+   "id": "ins_ab83381de2d73d1f20a4"
+  },
+  {
+   "type": "partial_dependence",
+   "name": "Behaviour curves",
+   "title": "Feature behaviour curves",
+   "summary": "Behaviour curves for the 6 most important features. 6 respond monotonically.",
+   "severity": "info",
+   "created_at": "2026-11-26T19:43:18.760965Z",
+   "status": "held",
+   "id": "ins_931d8aef56f092ae53cc"
+  },
+  {
+   "type": "interactions",
+   "name": "Interactions",
+   "title": "Feature interactions",
+   "summary": "The strongest interaction is between `income` and `loan_amount` (6% of their joint effect is non-additive).",
+   "severity": "info",
+   "created_at": "2026-11-26T19:43:20.584469Z",
+   "status": "held",
+   "id": "ins_cd638fe9c4124b59b987"
+  },
+  {
+   "type": "robustness",
+   "name": "Robustness",
+   "title": "Robustness to input noise",
+   "summary": "2.1% of decisions flip under 5%-σ input noise. Most fragile inputs: `credit_score`, `income`.",
+   "severity": "low",
+   "created_at": "2026-11-26T19:43:20.681313Z",
+   "status": "held",
+   "id": "ins_407bb4910bc3e4f47890"
+  },
+  {
+   "type": "drift",
+   "name": "Drift",
+   "title": "Input drift",
+   "summary": "Recent traffic has significant drift (PSI 0.85). Shifted inputs: `debt_to_income`, `utilization`, `employment_years`, `age`.",
+   "severity": "high",
+   "created_at": "2026-11-26T19:43:20.716159Z",
+   "status": "held",
+   "id": "ins_79de0b70103e445824be"
+  },
+  {
+   "type": "behavior",
+   "name": "Output behaviour",
+   "title": "Output behaviour",
+   "summary": "On 400 reference rows the model predicts `decline` 41% of the time; 18% of cases sit within ±0.10 of the decision threshold.",
+   "severity": "info",
+   "created_at": "2026-11-26T19:43:20.748767Z",
+   "status": "held",
+   "id": "ins_5075b28309466eab5c04"
+  },
+  {
+   "type": "performance",
+   "name": "Performance against outcomes",
+   "title": "Performance against outcomes",
+   "summary": "AUC on the latest 60 outcomes is 0.609, down from 0.868 on the 113 outcomes before them. That is worse by more than chance explains (z = -3.1).",
+   "severity": "high",
+   "created_at": "2026-11-26T19:43:20.764168Z",
+   "status": "held",
+   "id": "ins_5fbe353eede4ff392879"
+  }
+ ],
+ "not_run": [],
+ "alerts": 2,
+ "reason_table": {
+  "version": 2,
+  "approved_at": "2026-11-26T22:01:27.696276Z",
+  "approved_by": {
+   "user_id": "usr_87d9df7f1a6b0afe769a",
+   "name": "Kaimei Demo",
+   "role": "owner"
+  },
+  "adverse": {
+   "outcome": "decline"
+  },
+  "max_reasons": 4,
+  "content_hash": "6300976f46a28f6889531de279d06a8999a0386e24831f0593f8dfa68859d9f3",
+  "entries": [
+   {
+    "input": "credit_score",
+    "label": "Bureau credit score",
+    "reason": "Credit score",
+    "code": null
+   },
+   {
+    "input": "debt_to_income",
+    "label": "Total monthly debt / monthly income",
+    "reason": "Excessive obligations in relation to income",
+    "code": null
+   },
+   {
+    "input": "employment_years",
+    "label": "Years with current employer",
+    "reason": "Length of employment",
+    "code": null
+   },
+   {
+    "input": "num_delinquencies",
+    "label": "Delinquencies in the last 24 months",
+    "reason": "Delinquent past or present credit obligations with others",
+    "code": null
+   },
+   {
+    "input": "home_ownership",
+    "label": "Housing status",
+    "reason": "Length of residence",
+    "code": null
+   }
+  ],
+  "never_state": [
+   {
+    "input": "age",
+    "label": "Applicant age",
+    "why": "a prohibited basis under the Equal Credit Opportunity Act"
+   }
+  ],
+  "undecided": [
+   "income",
+   "utilization",
+   "loan_amount"
+  ]
+ },
+ "oversight": {
+  "status": "missing",
+  "detail": "This is a personal workspace, with one person in it. Oversight by others takes an organization."
+ },
+ "versions": [
+  {
+   "id": "mdl_1a597ffce58a7508fcb1",
+   "slug": "credit-risk-v3",
+   "version": "3",
+   "status": "active",
+   "created_at": "2026-11-26T19:43:17.050352Z",
+   "this": true
+  }
+ ],
+ "evidence": [
+  {
+   "id": "eu-ai-act",
+   "name": "EU AI Act",
+   "citation": "Regulation (EU) 2024/1689",
+   "scope": "The Act places its heaviest obligations on high-risk AI systems, such as those that evaluate the creditworthiness of people. Whether this model is part of one, and from when the obligations apply, is for you and your counsel.",
+   "sentence": "Evidence held toward 6 of 9 requirements, partly held for 3.",
+   "requirements": [
+    {
+     "title": "Risk management",
+     "reference": "Article 9",
+     "status": "held",
+     "yours": "The process, the risk decisions and their sign-off.",
+     "held": [
+      "Robustness",
+      "Drift",
+      "Behaviour curves"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Data governance",
+     "reference": "Article 10",
+     "status": "held",
+     "yours": "Examining the training data for bias.",
+     "held": [
+      "Reference data",
+      "Drift"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Technical documentation",
+     "reference": "Article 11, Annex IV",
+     "status": "partial",
+     "yours": "Writing and maintaining the documentation.",
+     "held": [
+      "Model description",
+      "Global importance",
+      "Behaviour curves",
+      "Learned rules"
+     ],
+     "stale": [],
+     "missing": [
+      "Model structure"
+     ]
+    },
+    {
+     "title": "Record-keeping",
+     "reference": "Articles 12, 19 and 26",
+     "status": "held",
+     "yours": "The retention schedule. Kaimei keeps records until you delete them.",
+     "held": [
+      "Logged predictions",
+      "Stored explanations"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Transparency to deployers",
+     "reference": "Article 13",
+     "status": "held",
+     "yours": "The instructions for use.",
+     "held": [
+      "Stored explanations",
+      "Global importance"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Human oversight",
+     "reference": "Article 14",
+     "status": "partial",
+     "yours": "Who oversees, their training and their authority.",
+     "held": [
+      "Decision records"
+     ],
+     "stale": [],
+     "missing": [
+      "People who can review"
+     ]
+    },
+    {
+     "title": "Accuracy and robustness",
+     "reference": "Article 15",
+     "status": "partial",
+     "yours": "Accuracy testing on your own held-out data, and the security of your systems.",
+     "held": [
+      "Robustness",
+      "Performance against outcomes"
+     ],
+     "stale": [],
+     "missing": [
+      "Model versions"
+     ]
+    },
+    {
+     "title": "Post-market monitoring",
+     "reference": "Article 72, providers",
+     "status": "held",
+     "yours": "The plan and the follow-up.",
+     "held": [
+      "Drift",
+      "Realised outcomes",
+      "Performance against outcomes"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Right to explanation",
+     "reference": "Article 86",
+     "status": "held",
+     "yours": "The explanation you give the person.",
+     "held": [
+      "Decision records"
+     ],
+     "stale": [],
+     "missing": []
+    }
+   ]
+  },
+  {
+   "id": "regulation-b",
+   "name": "Adverse action reasons",
+   "citation": "Equal Credit Opportunity Act and Regulation B, 12 CFR 1002",
+   "scope": "In the United States, a creditor that takes adverse action on a credit application gives the applicant a statement of specific reasons, or tells them they can ask for one. Whether a decision of this model is such an action is for you and your counsel.",
+   "sentence": "Evidence held toward 2 of 3 requirements, partly held for 1.",
+   "requirements": [
+    {
+     "title": "Specific, principal reasons",
+     "reference": "12 CFR 1002.9(b)(2)",
+     "status": "held",
+     "yours": "The notice: its content, timing and delivery.",
+     "held": [
+      "Decision records",
+      "Reason table"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Reasons that describe the factors actually scored",
+     "reference": "Commentary to 12 CFR 1002.9",
+     "status": "partial",
+     "yours": "The reason table's wording, and which inputs may be used at all.",
+     "held": [
+      "Reason table"
+     ],
+     "stale": [],
+     "missing": [
+      "Every input decided"
+     ]
+    },
+    {
+     "title": "Reasons on the record",
+     "reference": "For audits and complaints",
+     "status": "held",
+     "yours": "How long records are kept.",
+     "held": [
+      "Logged predictions",
+      "Decision records"
+     ],
+     "stale": [],
+     "missing": []
+    }
+   ]
+  },
+  {
+   "id": "model-risk",
+   "name": "Model risk management",
+   "citation": "SR 26-2 (US interagency guidance, which replaced SR 11-7) and PRA SS1/23",
+   "scope": "Supervisory guidance describes model validation as conceptual soundness, outcomes analysis and ongoing monitoring. Kaimei does not replace independent validation, which is a matter of people and process; it produces evidence that validators and model owners can examine and keep.",
+   "sentence": "Evidence held toward 5 of 6 requirements, none yet for 1.",
+   "requirements": [
+    {
+     "title": "Conceptual soundness",
+     "reference": "Does the model behave as theory and policy expect?",
+     "status": "held",
+     "yours": "The judgement of whether that behaviour is sound.",
+     "held": [
+      "Global importance",
+      "Behaviour curves",
+      "Learned rules",
+      "Interactions"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Sensitivity and stability",
+     "reference": "Validation activity",
+     "status": "held",
+     "yours": "The tolerance you set for it.",
+     "held": [
+      "Robustness"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Ongoing monitoring",
+     "reference": "Validation activity",
+     "status": "held",
+     "yours": "The monitoring plan and its thresholds.",
+     "held": [
+      "Logged predictions",
+      "Drift"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Outcomes analysis",
+     "reference": "Validation activity",
+     "status": "held",
+     "yours": "Collecting the outcomes, and acting on a finding.",
+     "held": [
+      "Realised outcomes",
+      "Performance against outcomes"
+     ],
+     "stale": [],
+     "missing": []
+    },
+    {
+     "title": "Benchmarking",
+     "reference": "Validation activity",
+     "status": "missing",
+     "yours": "The challenger, and what the comparison is taken to show.",
+     "held": [],
+     "stale": [],
+     "missing": [
+      "Model versions"
+     ]
+    },
+    {
+     "title": "Audit trail",
+     "reference": "Validation activity",
+     "status": "held",
+     "yours": "The validation report and its sign-off.",
+     "held": [
+      "Stored analyses",
+      "Decision records"
+     ],
+     "stale": [],
+     "missing": []
+    }
+   ]
+  },
+  {
+   "id": "gdpr",
+   "name": "GDPR, automated decisions",
+   "citation": "Regulation (EU) 2016/679, Articles 13 to 15 and 22",
+   "scope": "Where a decision is based solely on automated processing and has legal or similarly significant effects, Article 22 applies, and Articles 13 to 15 give people a right to meaningful information about the logic involved. Whether this model's decisions are such decisions is for you and your counsel.",
+   "sentence": "Kaimei holds evidence toward its one requirement.",
+   "requirements": [
+    {
+     "title": "Meaningful information about the logic involved",
+     "reference": "Articles 13 to 15, with Article 22",
+     "status": "held",
+     "yours": "How you present it to the person.",
+     "held": [
+      "Decision records",
+      "Global importance"
+     ],
+     "stale": [],
+     "missing": []
+    }
+   ]
+  }
+ ],
+ "limits": [
+  "Kaimei studies the model on the population you give it, so its conclusions are only as representative as that data.",
+  "Analyses use sampling; set a seed when you need to reproduce a result exactly.",
+  "This is not a validation report. Kaimei does not replace independent validation, which is a matter of people and process; it produces evidence that validators and model owners can examine and keep."
+ ],
+ "notice": "This is a check of what Kaimei stores for the model. It shows evidence you can draw on; it does not show that the model, or its use, meets any requirement, and it is not legal advice.",
+ "fingerprint": {
+  "algorithm": "sha256",
+  "value": "6ffddd956692162340c1bb4040e765dfd6e9c2b451e120f36e7bba5c1db272eb",
+  "covers": "Everything this report states, apart from the time it was generated and how long ago things happened."
+ }
+}

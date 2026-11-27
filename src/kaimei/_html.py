@@ -624,6 +624,11 @@ def render(data: Mapping[str, Any]) -> str:
     kind = str(data.get("object") or "")
     builder: Callable[[Mapping[str, Any]], str] = {
         "explanation": _explanation,
+        "decision_record": _decision_record,
+        "reason_table": _reason_table,
+        "evidence": _evidence,
+        "retention": _retention,
+        "model_report": _model_report,
         "insight": _insight,
         "model": _model,
         "prediction": _prediction,
@@ -1497,6 +1502,392 @@ def _explanation(data: Mapping[str, Any]) -> str:
     return "".join(out)
 
 
+def _decision_record(data: Mapping[str, Any]) -> str:
+    """A decision record. Every sentence is the API's own; the card only lays them out."""
+    outcome = _map(data.get("outcome"))
+    model = _map(data.get("model"))
+    explanation = _map(data.get("explanation"))
+    factors = [f for f in (data.get("factors") or []) if isinstance(f, Mapping)]
+    decided = _e(long_date(data["decided_at"])) if data.get("decided_at") else ""
+
+    out = [_head("Decision record", data.get("id"), decided)]
+    kind = outcome.get("kind")
+    main, sub = "", ""
+    if kind == "number" and _float(outcome.get("value")) is not None:
+        main = fmt_value(outcome.get("value"), outcome.get("unit") or None)
+        sub = str(outcome.get("name") or "")
+    elif outcome.get("label") is not None:
+        main = str(outcome["label"])
+        if kind == "binary" and _float(outcome.get("probability")) is not None:
+            sub = f"P({outcome.get('positive_label')}) = {pct(outcome['probability'], 1)} · threshold {pct(outcome.get('threshold'), 0)}"
+        elif _float(outcome.get("probability")) is not None:
+            sub = f"P({outcome['label']}) = {pct(outcome['probability'], 1)}"
+    if main:
+        tail = f'<span class="km-sub">{_e(sub)}</span>' if sub else ""
+        out.append(f'<div class="km-result"><span class="km-value">{_e(main)}</span>{tail}</div>')
+    badges = []
+    if model.get("name"):
+        badges.append(_badge(f"{model['name']} · v{model.get('version')}", title="The model that made this decision"))
+    if explanation:
+        why = str(explanation.get("reproducible_sentence") or "")
+        badges.append(_badge(explanation.get("method_name") or explanation.get("method") or "explained", "ok"))
+        badges.append(_badge("reproducible", "ok", title=why) if explanation.get("reproducible") else _badge("not exactly reproducible", "warn", title=why))
+    else:
+        badges.append(_badge("not explained", "warn", title="client.decisions.explain(id) adds how the model reached it"))
+    out.append(_badges(badges))
+    if outcome.get("sentence"):
+        out.append(f'<div class="km-lead" style="color:var(--text);font-size:14px">{_e(outcome["sentence"])}</div>')
+    for note in data.get("notes") or []:
+        out.append(f'<div class="km-lead">{_badge("note", "warn")} {_e(note)}</div>')
+
+    view = _map(data.get("view"))
+    if explanation:
+        out.append('<div class="km-h">How the model reached it</div>')
+        reference = _map(explanation.get("reference")).get("sentence")
+        # A picture, a text or a series: the record's own account of what the model was looking at.
+        for sentence in view.get("sentences") or []:
+            out.append(f'<div class="km-lead" style="margin-bottom:6px">{_e(sentence)}</div>')
+        if reference and not view:
+            out.append(f'<div class="km-lead">{_e(reference)}</div>')
+        if view.get("kind") == "text" and view.get("parts"):
+            out.append(_token_strip([part for part in view["parts"] if isinstance(part, Mapping)]))
+        elif view.get("kind") == "image":
+            out.append(
+                '<div class="km-faint" style="margin:0 0 10px">The picture, with the model\'s evidence drawn on it, is in the '
+                "PDF (<span class=km-mono>client.decisions.save_pdf</span>) and on the record in the dashboard.</div>"
+            )
+        rows = [
+            (str(f.get("label") or f.get("feature")), None if f.get("display") is None else str(f.get("display")), _float(f.get("attribution")) or 0.0)
+            for f in factors
+        ]
+        legend = ("toward", "against") if explanation.get("measure") == "evidence" else ("raises it", "lowers it")
+        out.append(_diverging_bars(rows[:14], legend=legend))
+        if len(rows) > 14:
+            out.append(_details(f"All {len(rows)} effects", _diverging_bars(rows[14:])))
+        if explanation.get("summary"):
+            out.append(f'<div class="km-lead" style="color:var(--text);margin-top:10px">{_e(explanation["summary"])}</div>')
+        moved = [f for f in factors if f.get("direction") != "none" and f.get("sentence")]
+        # An effect too small to print has a sentence that says so; a list in words leaves those out.
+        stated = [f for f in moved if not f.get("negligible")] or moved
+        if stated:
+            lines = "".join(f'<div>{_e(f.get("rank"))}. {_e(f["sentence"])}</div>' for f in stated)
+            out.append(_details("In words", f'<div class="km-cf">{lines}</div>', open_=len(stated) <= 6, note=f"{len(stated)} effects"))
+
+    counterfactual = _map(data.get("counterfactual"))
+    if counterfactual.get("sentence"):
+        body = f'<div>{_e(counterfactual["sentence"])}</div><span class="km-faint">{_e(counterfactual.get("note") or "")}</span>'
+        out.append(_details("What would have changed the outcome", f'<div class="km-cf">{body}</div>', open_=True))
+
+    drafted = _map(data.get("reasons"))
+    if drafted:
+        cited = _map(drafted.get("table"))
+        which = "the draft reason table" if cited.get("status") == "draft" else f"reason table version {cited.get('version')}"
+        said = [f'<div>{_e(drafted.get("sentence") or "")}</div>']
+        for number, item in enumerate([r for r in (drafted.get("reasons") or []) if isinstance(r, Mapping)], start=1):
+            source = str(item.get("label") or item.get("feature") or "")
+            if item.get("display") is not None:
+                source += f" ({item.get('display')})"
+            said.append(f'<div>{number}. <b>{_e(item.get("reason"))}</b> <span class="km-faint">from {_e(source)}</span></div>')
+        for item in drafted.get("held") or []:
+            if isinstance(item, Mapping):
+                said.append(f'<div>{_badge("held for review", "warn")} {_e(item.get("sentence"))}</div>')
+        for note in drafted.get("notes") or []:
+            said.append(f'<div class="km-faint">{_e(note)}</div>')
+        said.append(f'<span class="km-faint">In the wording of {_e(which)}. {_e(drafted.get("notice") or "")}</span>')
+        out.append(_details("Draft reasons", f'<div class="km-cf">{"".join(said)}</div>', open_=bool(drafted.get("applies"))))
+
+    policy = _map(data.get("policy"))
+    if policy:
+        said = [f"<div>{_e(sentence)}</div>" for sentence in policy.get("sentences") or []]
+        for item in policy.get("reasons") or []:
+            if isinstance(item, Mapping):
+                said.append(
+                    f'<div>{_badge("reason given by a rule")} <b>{_e(item.get("reason"))}</b> '
+                    f'<span class="km-faint">{_e(item.get("rule"))}</span></div>'
+                )
+        if policy.get("note"):
+            said.append(f"<div>Note: {_e(policy.get('note'))}</div>")
+        by = _map(policy.get("recorded_by")).get("name")
+        when = long_date(policy["recorded_at"]) if policy.get("recorded_at") else ""
+        signed = f"Recorded {when}" + (f" by {by}" if by else "")
+        if policy.get("amended_at"):
+            signed += f"; revision {policy.get('revision')}"
+        said.append(f'<span class="km-faint">{_e(signed)}. {_e(policy.get("stated") or "")}</span>')
+        out.append(_details("What was decided", f'<div class="km-cf">{"".join(said)}</div>', open_=True))
+    held = [h for h in (data.get("holds") or []) if isinstance(h, Mapping)]
+    history = [h for h in (data.get("history") or []) if isinstance(h, Mapping)]
+    if held or history:
+        custody = []
+        for hold in held:
+            covers = "this decision" if hold.get("scope") == "decision" else "every record of the model"
+            matter = f" ({_e(hold.get('matter'))})" if hold.get("matter") else ""
+            custody.append(f'<div>{_badge("on hold", "warn")} <b>{_e(hold.get("reason"))}</b>{matter} <span class="km-faint">covers {covers}</span></div>')
+        for entry in history[-12:]:
+            when = long_date(entry["at"]) if entry.get("at") else ""
+            custody.append(f'<div><span class="km-faint">{_e(when)} · {_e(entry.get("by"))}</span> {_e(entry.get("summary"))}</div>')
+        out.append(_details("Custody of this record", f'<div class="km-cf">{"".join(custody)}</div>', open_=bool(held)))
+
+    inputs = [i for i in (data.get("inputs") or []) if isinstance(i, Mapping)]
+    if inputs:
+        table = _table(
+            [("Input", ""), ("Name", "mono muted"), ("Value as stored", "mono"), ("Unit", "muted")],
+            (
+                [
+                    _e(i.get("label") or ""),
+                    _e(i.get("name") or ""),
+                    _e(i.get("exact") if i.get("exact") is not None else i.get("display") or ""),
+                    _e(i.get("unit") or ""),
+                ]
+                for i in inputs
+            ),
+        )
+        out.append(_details("Inputs as recorded", table, note=f"{len(inputs)} inputs"))
+    if explanation:
+        compared = _map(explanation.get("reference"))
+        source = str(compared.get("source_words") or "")
+        if source and compared.get("rows"):
+            source = f"{int(compared['rows']):,} rows from {source}"
+        how = [
+            ("method", _e(f"{explanation.get('method_name')}. {explanation.get('method_sentence') or ''}".strip())),
+            ("reproducible", _e(explanation.get("reproducible_sentence") or "")),
+            ("compared with", _e(source)),
+            ("seed", _e("none" if explanation.get("seed") is None else explanation.get("seed"))),
+            ("explanation", _e(explanation.get("id") or "")),
+            ("computed", _e(long_date(explanation["computed_at"])) if explanation.get("computed_at") else ""),
+        ]
+        out.append(_details("How this was computed", _kv_table(how)))
+    limits = [item for item in (data.get("limits") or []) if isinstance(item, Mapping)]
+    if limits:
+        lines = "".join(f'<div><b>{_e(item.get("title"))}</b> {_e(item.get("text"))}</div>' for item in limits)
+        notice = f'<span class="km-faint">{_e(data.get("notice") or "")}</span>'
+        out.append(_details("What this record does not show", f'<div class="km-cf">{lines}{notice}</div>'))
+    out.append(_raw_json("JSON", data, note="to_json() has everything"))
+    mark = str(_map(data.get("fingerprint")).get("value") or "")
+    left = f'Fingerprint <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
+    where = "/decisions/" + "/".join(quote(part, safe="") for part in str(data.get("id") or "").split("/"))
+    out.append(_foot(left, _link(where, "Open in dashboard") if data.get("id") else ""))
+    return "".join(out)
+
+
+def _period(days: Any) -> str:
+    return "until deleted" if days is None else f"{int(days):,} days"
+
+
+def _retention(data: Mapping[str, Any]) -> str:
+    """An organization's retention schedule: its period, then each model's, what is due and what is held."""
+    default = _map(data.get("default"))
+    models = [m for m in (data.get("models") or []) if isinstance(m, Mapping)]
+    out = [_head("Retention", None, "")]
+    if default:
+        main, sub = f"{int(default.get('keep_days') or 0):,} days", "after a record is logged, it is deleted"
+    else:
+        main, sub = "Kept until deleted", "no period is set"
+    out.append(f'<div class="km-result"><span class="km-value">{_e(main)}</span><span class="km-sub">{_e(sub)}</span></div>')
+    due_d = sum(int(_map(m.get("due")).get("decisions") or 0) for m in models)
+    due_e = sum(int(_map(m.get("due")).get("explanations") or 0) for m in models)
+    holds = int(_map(data.get("holds")).get("active") or 0)
+    badges = [_badge(f"{due_d:,} decisions and {due_e:,} explanations due", "warn" if due_d or due_e else "ok")]
+    badges.append(_badge(f"{holds:,} hold{'' if holds == 1 else 's'} in force", "warn" if holds else ""))
+    if data.get("last_run_at"):
+        badges.append(_badge(f"last applied {long_date(data['last_run_at'])}"))
+    out.append(_badges(badges))
+    rows = []
+    for item in models:
+        model, held, due = _map(item.get("model")), _map(item.get("held")), _map(item.get("due"))
+        whose = {"model": " (its own)", "organization": "", "none": ""}.get(str(item.get("source")), "")
+        hold = "every record" if held.get("model") else (f"{int(held.get('decisions') or 0):,} decisions" if held.get("decisions") else "—")
+        rows.append(
+            [
+                f"<b>{_e(model.get('name'))}</b>",
+                _e(_period(item.get("keep_days")) + whose),
+                _e(f"{int(item.get('decisions') or 0):,}"),
+                _date_cell(item.get("oldest_at")),
+                _e("held" if held.get("model") else f"{int(due.get('decisions') or 0):,}"),
+                _e(hold),
+            ]
+        )
+    if rows:
+        out.append(
+            _table(
+                [("Model", ""), ("Records are kept", ""), ("Decisions", "num"), ("Oldest", "muted"), ("Due now", "num"), ("Holds", "")],
+                rows,
+            )
+        )
+    out.append(f'<div class="km-lead"><span class="km-faint">{_e(data.get("covers") or "")}</span></div>')
+    out.append(_raw_json("JSON", data, note="to_json() has everything"))
+    out.append(_foot(f"Shortest period {int(data.get('minimum_days') or 0)} days", _link("/retention", "Open in dashboard")))
+    return "".join(out)
+
+
+_EVIDENCE_WORDS = {
+    "held": ("held", "ok"),
+    "partial": ("partly held", "warn"),
+    "stale": ("out of date", "warn"),
+    "missing": ("not held yet", ""),
+    "not_applicable": ("does not apply", ""),
+}
+
+
+def _evidence_summary(frameworks: Iterable[Any]) -> str:
+    """A table of rules: how many requirements of each have evidence held, and the sentence that says it."""
+    rows = []
+    for framework in frameworks:
+        framework = _map(framework)
+        summary = _map(framework.get("summary"))
+        sentence = framework.get("sentence") or summary.get("sentence") or ""
+        rows.append(
+            [
+                f'<b>{_e(framework.get("name"))}</b><br><span class="km-faint">{_e(framework.get("citation") or "")}</span>',
+                _e(sentence),
+            ]
+        )
+    return _table([("Rule", "wrap"), ("Evidence Kaimei holds", "wrap")], rows) if rows else ""
+
+
+def _evidence(data: Mapping[str, Any]) -> str:
+    """A model's evidence by requirement: each rule in a sentence, the requirements under it, and what to add."""
+    model = _map(data.get("model"))
+    frameworks = [f for f in (data.get("frameworks") or []) if isinstance(f, Mapping)]
+    held = sum(int(_map(f.get("summary")).get("held") or 0) for f in frameworks)
+    total = sum(int(_map(f.get("summary")).get("requirements") or 0) for f in frameworks)
+    out = [_head("Evidence", model.get("slug"), _when(data, key="checked_at"))]
+    out.append(
+        f'<div class="km-result"><span class="km-value">{held} of {total}</span>'
+        f'<span class="km-sub">requirements with evidence held · {_e(model.get("name") or "")}</span></div>'
+    )
+    out.append(_evidence_summary(frameworks))
+    for framework in frameworks:
+        rows = []
+        for requirement in framework.get("requirements") or []:
+            requirement = _map(requirement)
+            words, tone = _EVIDENCE_WORDS.get(str(requirement.get("status")), (str(requirement.get("status")), ""))
+            parts = [_map(part) for part in requirement.get("evidence") or []]
+            listed = "; ".join(
+                f"{_e(part.get('label'))} ({_e(_EVIDENCE_WORDS.get(str(part.get('status')), ('', ''))[0])})" for part in parts
+            )
+            rows.append(
+                [
+                    f'<b>{_e(requirement.get("title"))}</b><br><span class="km-faint">{_e(requirement.get("reference"))}</span>',
+                    _badge(words, tone),
+                    listed,
+                ]
+            )
+        if rows:
+            body = _table([("Requirement", "wrap"), ("Evidence", ""), ("What is checked", "wrap")], rows)
+            out.append(_details(_e(framework.get("name")), body, note=f"{len(rows)} requirements"))
+    todo = [_map(entry) for entry in data.get("todo") or []]
+    if todo:
+        lines = "".join(f'<div><b>{_e(entry.get("label"))}.</b> {_e(entry.get("todo"))}</div>' for entry in todo)
+        out.append(_details("What would add evidence", f'<div class="km-cf">{lines}</div>', open_=True, note=str(len(todo))))
+    out.append(_raw_json("JSON", data))
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/compliance", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot(f'<span class="km-faint">{_e(data.get("notice") or "")}</span>', link))
+    return "".join(out)
+
+
+def _model_report(data: Mapping[str, Any]) -> str:
+    """A model documentation report: what the model is, what its analyses found, and the evidence held."""
+    model = _map(data.get("model"))
+    out = [_head("Model documentation", model.get("slug"), _when(data, key="generated_at"))]
+    out.append(
+        f'<div class="km-result"><span class="km-title">{_e(model.get("name") or "")}</span>'
+        f'<span class="km-sub">version {_e(model.get("version"))} · {_e(model.get("task_words") or model.get("task") or "")}</span></div>'
+    )
+    if model.get("description"):
+        out.append(f'<div class="km-lead" style="color:var(--text)">{_e(model["description"])}</div>')
+    said = " ".join(str(part) for part in (_map(data.get("output")).get("sentence"), _map(data.get("runs")).get("sentence")) if part)
+    if said:
+        out.append(f'<div class="km-lead">{_e(said)}</div>')
+    findings = [_map(f) for f in data.get("findings") or []]
+    if findings:
+        out.append('<div class="km-h">What the analyses found</div>')
+        lines = "".join(
+            f'<div><b>{_e(f.get("name"))}.</b> {_e(f.get("summary") or f.get("title") or "")} '
+            f'<span class="km-faint">{_e(short_date(f.get("created_at")))}</span></div>'
+            for f in findings
+        )
+        out.append(f'<div class="km-cf">{lines}</div>')
+    not_run = [str(name) for name in data.get("not_run") or []]
+    if not_run:
+        out.append(f'<div class="km-faint" style="margin-top:6px">Not run: {_e(", ".join(not_run))}.</div>')
+    holdings = [_map(h) for h in data.get("holdings") or []]
+    if holdings:
+        rows = [[f'<b>{_e(h.get("label"))}</b>', _e(h.get("detail") or "")] for h in holdings]
+        out.append(_details("What Kaimei holds about it", _table([("What", ""), ("Held", "wrap")], rows), note=str(len(rows))))
+    frameworks = [f for f in (data.get("evidence") or []) if isinstance(f, Mapping)]
+    if frameworks:
+        out.append(_details("Evidence held, by rule", _evidence_summary(frameworks), open_=True))
+    limits = "".join(f"<div>{_e(line)}</div>" for line in data.get("limits") or [])
+    if limits:
+        out.append(_details("What this report does not show", f'<div class="km-cf">{limits}</div>'))
+    out.append(_raw_json("JSON", data, note="to_json() has everything"))
+    mark = str(_map(data.get("fingerprint")).get("value") or "")
+    left = f'Fingerprint <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/compliance", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot(left, link))
+    return "".join(out)
+
+
+def _reason_table(data: Mapping[str, Any]) -> str:
+    """A reason table: which version it is, what it gives reasons for, and its wording input by input."""
+    model = _map(data.get("model"))
+    adverse = _map(data.get("adverse"))
+    coverage = _map(data.get("coverage"))
+    status = str(data.get("status") or "")
+    out = [_head("Reason table", data.get("id"), _when(data, key="approved_at") or _when(data, key="updated_at"))]
+    title = "Draft" if status == "draft" else f"Version {data.get('version')}"
+    out.append(f'<div class="km-result"><span class="km-title">{_e(title)}</span><span class="km-sub">{_e(model.get("name") or "")}</span></div>')
+    badges = [_badge("in force", "ok") if status == "approved" else _badge(status or "draft", "warn" if status == "draft" else "")]
+    against = adverse.get("outcome") or (f"a {adverse.get('direction')} prediction" if adverse.get("direction") else "")
+    if against:
+        badges.append(_badge(f"reasons for {against}", "info"))
+    badges.append(_badge(f"at most {data.get('max_reasons')} reasons", mono=True))
+    undecided = [str(name) for name in coverage.get("unmapped") or []]
+    badges.append(_badge("every input decided", "ok") if not undecided else _badge(f"{len(undecided)} inputs undecided", "warn"))
+    out.append(_badges(badges))
+    who = _map(data.get("approved_by")).get("name")
+    if status != "draft" and who:
+        out.append(f'<div class="km-lead">Approved by {_e(who)}.</div>')
+    elif status == "draft":
+        out.append('<div class="km-lead">A draft changes nothing until a reviewer, admin or owner approves it.</div>')
+    rows = [
+        [_e(name), _badge("reason", "ok"), _e(_map(entry).get("reason") or ""), _e(_map(entry).get("code") or "")]
+        for name, entry in _map(data.get("entries")).items()
+    ]
+    rows += [[_e(name), _badge("never state", "warn"), _e(why or ""), ""] for name, why in _map(data.get("never_state")).items()]
+    rows += [[_e(name), _badge("undecided"), '<span class="km-faint">held for review when it pushes toward the adverse outcome</span>', ""] for name in undecided]
+    if rows:
+        out.append(_table([("Input", "mono"), ("Treatment", ""), ("Approved wording, or why never stated", "wrap"), ("Code", "mono muted")], rows))
+    if data.get("note"):
+        out.append(f'<div class="km-faint" style="margin-top:8px">What changed: {_e(data.get("note"))}</div>')
+    out.append(_raw_json("JSON", data))
+    mark = str(data.get("content_hash") or "")
+    left = f'Content <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
+    link = _link(f"/models/{quote(str(model.get('slug')), safe='')}/compliance?view=reasons", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot(left, link))
+    return "".join(out)
+
+
+def _token_strip(parts: Sequence[Mapping[str, Any]]) -> str:
+    """A text as the model read it: each token on the colour of its effect, stronger for a larger one."""
+    chips = []
+    for part in parts:
+        strength = max(0.0, min(1.0, _float(part.get("strength")) or 0.0))
+        direction = part.get("direction")
+        style = "display:inline-block;padding:1px 5px;margin:2px 1px;border-radius:5px;border:1px solid var(--line)"
+        if direction in ("raises", "lowers") and strength >= 0.02:
+            hue = "107,140,255" if direction == "raises" else "255,107,181"
+            style += f";background:rgba({hue},{0.14 + 0.5 * strength:.2f})"
+        value = _float(part.get("attribution"))
+        title = f' title="{_e(fmt_signed(value, 4))}"' if value is not None else ""
+        chips.append(f'<span style="{style}"{title}>{_e(part.get("label"))}</span>')
+    key = (
+        '<div class="km-legend" style="margin-top:6px"><span><i style="background:rgba(107,140,255,.6)"></i>raised it</span>'
+        '<span><i style="background:rgba(255,107,181,.6)"></i>lowered it</span></div>'
+    )
+    return f'<div style="margin:2px 0 12px;line-height:2">{"".join(chips)}{key}</div>'
+
+
 def _attribution_rows(data: Mapping[str, Any], inputs: Mapping[str, Any]) -> List[Tuple[str, Optional[str], float]]:
     rows: List[Tuple[str, Optional[str], float]] = []
     top = [f for f in (data.get("top_features") or []) if isinstance(f, Mapping)]
@@ -2029,6 +2420,49 @@ def _page_table(kind: str, items: Sequence[Mapping[str, Any]]) -> str:
             [("ID", "mono"), ("Model", "mono muted"), ("Output", ""), ("Top features", "wrap"), ("Method", ""), ("Evals", "num"), ("Latency", "num"), ("When", "muted")],
             rows,
         )
+    if kind == "decision":
+        rows = []
+        for d in items:
+            outcome = _map(d.get("outcome"))
+            if outcome.get("label") is not None:
+                chance = _float(outcome.get("probability"))
+                shown = f"<b>{_e(outcome['label'])}</b>" + (f' <span class="km-faint">{pct(chance, 1)}</span>' if chance is not None else "")
+            elif _float(outcome.get("value")) is not None:
+                shown = f"<b>{_e(fmt_value(outcome.get('value'), outcome.get('unit') or None))}</b>"
+            else:
+                shown = '<span class="km-faint">not logged</span>'
+            rows.append(
+                [
+                    _e(d.get("id") or ""),
+                    _e(d.get("model_id") or ""),
+                    shown,
+                    _badge("explained", "ok") if d.get("explained") else _badge("not explained"),
+                    _date_cell(d.get("decided_at")),
+                ]
+            )
+        return _table([("Decision id", "mono"), ("Model", "mono muted"), ("Outcome", ""), ("Record", ""), ("Decided", "muted")], rows)
+    if kind == "audit_event":
+        rows = [
+            [
+                _date_cell(e.get("at")),
+                _e(_map(e.get("actor")).get("name") or ""),
+                f"{_e(e.get('summary') or '')}<br><span class=\"km-faint km-mono\">{_e(e.get('action') or '')}</span>",
+            ]
+            for e in items
+        ]
+        return _table([("When", "muted"), ("Who", ""), ("What happened", "wrap")], rows)
+    if kind == "hold":
+        rows = [
+            [
+                _e(h.get("decision_id") or f"every record of {_map(h.get('model')).get('name') or 'a model'}"),
+                _e(h.get("reason") or ""),
+                _e(h.get("matter") or "—"),
+                _badge("in force", "warn") if h.get("active") else _badge("released"),
+                _date_cell(h.get("placed_at")),
+            ]
+            for h in items
+        ]
+        return _table([("Holds", "mono"), ("Why", "wrap"), ("Matter", "mono"), ("State", ""), ("Placed", "muted")], rows)
     if kind == "insight":
         rows = [
             [

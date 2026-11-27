@@ -1,0 +1,83 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "object": "hold",
+   "id": "hold_cc91f6dc2af1631c92f7",
+   "scope": "decision",
+   "decision_id": "LOAN/2026/0042",
+   "model": {
+    "id": "mdl_credit",
+    "slug": "credit-risk-v3",
+    "name": "Credit risk scorer"
+   },
+   "reason": "Customer complaint under review",
+   "matter": "CASE-2026-0117",
+   "active": true,
+   "placed_by": {
+    "type": "user",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   },
+   "placed_at": "2026-11-26T23:46:34.037806Z",
+   "released_by": null,
+   "released_at": null
+  },
+  {
+   "object": "hold",
+   "id": "hold_7fa8f7cf29855b6b506b",
+   "scope": "model",
+   "decision_id": null,
+   "model": {
+    "id": "mdl_credit",
+    "slug": "credit-risk-v3",
+    "name": "Credit risk scorer"
+   },
+   "reason": "Model under supervisory review",
+   "matter": "SUP-2026-04",
+   "active": false,
+   "placed_by": {
+    "type": "user",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   },
+   "placed_at": "2026-11-26T23:49:19.003947Z",
+   "released_by": {
+    "type": "user",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   },
+   "released_at": "2026-11-26T23:49:19.145534Z"
+  },
+  {
+   "object": "hold",
+   "id": "hold_4cea233315c96a0f7b25",
+   "scope": "model",
+   "decision_id": null,
+   "model": {
+    "id": "mdl_credit",
+    "slug": "credit-risk-v3",
+    "name": "Credit risk scorer"
+   },
+   "reason": "Model under supervisory review",
+   "matter": "SUP-2026-04",
+   "active": false,
+   "placed_by": {
+    "type": "user",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   },
+   "placed_at": "2026-11-26T23:49:00.889625Z",
+   "released_by": {
+    "type": "user",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   },
+   "released_at": "2026-11-26T23:49:15.106980Z"
+  }
+ ],
+ "total": 4,
+ "limit": 3,
+ "offset": 0,
+ "has_more": true
+}

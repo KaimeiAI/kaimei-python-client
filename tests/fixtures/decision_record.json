@@ -1,0 +1,446 @@
+{
+ "object": "decision_record",
+ "id": "APP-2026-00417",
+ "status": "explained",
+ "logged": true,
+ "decided_at": "2026-11-26T20:06:32.595460Z",
+ "source": "api",
+ "model": {
+  "id": "mdl_credit",
+  "name": "Credit risk scorer",
+  "slug": "credit-risk-v3",
+  "version": "3",
+  "task": "binary_classification",
+  "framework": "sklearn",
+  "status": "active"
+ },
+ "outcome": {
+  "kind": "binary",
+  "name": "decision",
+  "output": {
+   "label": "decline",
+   "class_index": 1,
+   "probability": 0.5946779284704223,
+   "probabilities": {
+    "approve": 0.40532207152957767,
+    "decline": 0.5946779284704223
+   },
+   "target_label": "decline",
+   "target_index": 1,
+   "value": 0.5946779284704223,
+   "name": "decision"
+  },
+  "sentence": "The model gave this case a 59.5% chance of decline. That is at or above the 50% threshold, so the outcome is decline.",
+  "label": "decline",
+  "probabilities": {
+   "approve": 0.40532207152957767,
+   "decline": 0.5946779284704223
+  },
+  "positive_label": "decline",
+  "other_label": "approve",
+  "probability": 0.5946779284704223,
+  "threshold": 0.5
+ },
+ "inputs": [
+  {
+   "name": "income",
+   "label": "Annual gross income",
+   "type": "numeric",
+   "value": 72000,
+   "display": "72,000 USD/yr",
+   "exact": "72000",
+   "unit": "USD/yr",
+   "description": "Annual gross income",
+   "declared": true
+  },
+  {
+   "name": "credit_score",
+   "label": "Bureau credit score",
+   "type": "integer",
+   "value": 681,
+   "display": "681",
+   "exact": "681",
+   "unit": null,
+   "description": "Bureau credit score",
+   "declared": true
+  },
+  {
+   "name": "utilization",
+   "label": "Revolving credit utilization ratio",
+   "type": "numeric",
+   "value": 0.41,
+   "display": "0.41",
+   "exact": "0.41",
+   "unit": null,
+   "description": "Revolving credit utilization ratio",
+   "declared": true
+  },
+  {
+   "name": "debt_to_income",
+   "label": "Total monthly debt / monthly income",
+   "type": "numeric",
+   "value": 0.38,
+   "display": "0.38",
+   "exact": "0.38",
+   "unit": null,
+   "description": "Total monthly debt / monthly income",
+   "declared": true
+  },
+  {
+   "name": "loan_amount",
+   "label": "Requested loan amount",
+   "type": "numeric",
+   "value": 18000,
+   "display": "18,000 USD",
+   "exact": "18000",
+   "unit": "USD",
+   "description": "Requested loan amount",
+   "declared": true
+  },
+  {
+   "name": "employment_years",
+   "label": "Years with current employer",
+   "type": "numeric",
+   "value": 4,
+   "display": "4 years",
+   "exact": "4",
+   "unit": "years",
+   "description": "Years with current employer",
+   "declared": true
+  },
+  {
+   "name": "num_delinquencies",
+   "label": "Delinquencies in the last 24 months",
+   "type": "integer",
+   "value": 1,
+   "display": "1",
+   "exact": "1",
+   "unit": null,
+   "description": "Delinquencies in the last 24 months",
+   "declared": true
+  },
+  {
+   "name": "age",
+   "label": "Applicant age",
+   "type": "integer",
+   "value": 34,
+   "display": "34 years",
+   "exact": "34",
+   "unit": "years",
+   "description": "Applicant age",
+   "declared": true
+  },
+  {
+   "name": "home_ownership",
+   "label": "Housing status",
+   "type": "categorical",
+   "value": "rent",
+   "display": "rent",
+   "exact": "rent",
+   "unit": null,
+   "description": "Housing status",
+   "declared": true
+  }
+ ],
+ "actual": null,
+ "explanation": {
+  "id": "exp_2e97e620f04a4f2bc105",
+  "method": "shap",
+  "method_name": "KernelSHAP",
+  "method_sentence": "Shapley values: each input's fair share of the difference between this case and the average case.",
+  "computed_at": "2026-11-26T20:06:33.400041Z",
+  "exact": true,
+  "seed": 0,
+  "reproducible": true,
+  "reproducible_sentence": "The method was exact: every combination of inputs was evaluated, so the same model version and reference data give the same numbers every time.",
+  "model_calls": 32868,
+  "reference": {
+   "source": "reference_data",
+   "source_words": "the model's reference data",
+   "rows": 64,
+   "sentence": "The starting point is 49.0%: the model's average chance of decline across 64 rows drawn from the model's reference data."
+  },
+  "kind": "table",
+  "explains": "the chance of decline",
+  "target_label": "decline",
+  "measure": "chance",
+  "unit": null,
+  "adds_up": true,
+  "base_value": 0.4904096039702106,
+  "value": 0.5946779284704223,
+  "total": 0.10426832450021173,
+  "summary": "Together the inputs raise the chance of decline by 10.4 percentage points, from the starting point of 49.0% to this case's 59.5%.",
+  "options": {
+   "seed": 0,
+   "counterfactual": true,
+   "max_changes": 3,
+   "frozen_features": [
+    "age"
+   ],
+   "log_prediction": false,
+   "top_k": 100,
+   "estimator": "kernel",
+   "exact": true,
+   "n_coalitions": 510,
+   "n_samples": 510,
+   "background_rows": 64,
+   "background_source": "reference_data"
+  },
+  "requested_by": {
+   "name": "Kaimei Demo",
+   "role": "owner"
+  },
+  "parts": false
+ },
+ "factors": [
+  {
+   "rank": 1,
+   "feature": "debt_to_income",
+   "label": "Total monthly debt / monthly income",
+   "value": 0.38,
+   "display": "0.38",
+   "attribution": 0.07970604262568466,
+   "share": 0.2107,
+   "direction": "raises",
+   "sentence": "Total monthly debt / monthly income (0.38) raised the chance of decline by 8.0 percentage points."
+  },
+  {
+   "rank": 2,
+   "feature": "num_delinquencies",
+   "label": "Delinquencies in the last 24 months",
+   "value": 1,
+   "display": "1",
+   "attribution": 0.07483986997713922,
+   "share": 0.1978,
+   "direction": "raises",
+   "sentence": "Delinquencies in the last 24 months (1) raised the chance of decline by 7.5 percentage points."
+  },
+  {
+   "rank": 3,
+   "feature": "utilization",
+   "label": "Revolving credit utilization ratio",
+   "value": 0.41,
+   "display": "0.41",
+   "attribution": -0.06223710607192746,
+   "share": 0.1645,
+   "direction": "lowers",
+   "sentence": "Revolving credit utilization ratio (0.41) lowered the chance of decline by 6.2 percentage points."
+  },
+  {
+   "rank": 4,
+   "feature": "income",
+   "label": "Annual gross income",
+   "value": 72000,
+   "display": "72,000 USD/yr",
+   "attribution": -0.052572021945134405,
+   "share": 0.1389,
+   "direction": "lowers",
+   "sentence": "Annual gross income (72,000 USD/yr) lowered the chance of decline by 5.3 percentage points."
+  },
+  {
+   "rank": 5,
+   "feature": "home_ownership",
+   "label": "Housing status",
+   "value": "rent",
+   "display": "rent",
+   "attribution": 0.0457483647176272,
+   "share": 0.1209,
+   "direction": "raises",
+   "sentence": "Housing status (rent) raised the chance of decline by 4.6 percentage points."
+  },
+  {
+   "rank": 6,
+   "feature": "loan_amount",
+   "label": "Requested loan amount",
+   "value": 18000,
+   "display": "18,000 USD",
+   "attribution": -0.022241537498321123,
+   "share": 0.0588,
+   "direction": "lowers",
+   "sentence": "Requested loan amount (18,000 USD) lowered the chance of decline by 2.2 percentage points."
+  },
+  {
+   "rank": 7,
+   "feature": "credit_score",
+   "label": "Bureau credit score",
+   "value": 681,
+   "display": "681",
+   "attribution": 0.02091959996185499,
+   "share": 0.0553,
+   "direction": "raises",
+   "sentence": "Bureau credit score (681) raised the chance of decline by 2.1 percentage points."
+  },
+  {
+   "rank": 8,
+   "feature": "age",
+   "label": "Applicant age",
+   "value": 34,
+   "display": "34 years",
+   "attribution": 0.01277835351529626,
+   "share": 0.0338,
+   "direction": "raises",
+   "sentence": "Applicant age (34 years) raised the chance of decline by 1.3 percentage points."
+  },
+  {
+   "rank": 9,
+   "feature": "employment_years",
+   "label": "Years with current employer",
+   "value": 4,
+   "display": "4 years",
+   "attribution": 0.007326759217992391,
+   "share": 0.0194,
+   "direction": "raises",
+   "sentence": "Years with current employer (4 years) raised the chance of decline by 0.7 percentage points."
+  }
+ ],
+ "counterfactual": {
+  "found": true,
+  "changes": [
+   {
+    "feature": "credit_score",
+    "label": "Bureau credit score",
+    "from": 681,
+    "to": 850,
+    "from_display": "681",
+    "to_display": "850"
+   }
+  ],
+  "frozen_features": [
+   "age"
+  ],
+  "output_before": 0.5946779284704223,
+  "output_after": 0.08338468266207734,
+  "target": {
+   "kind": "flip_decision",
+   "threshold": 0.5
+  },
+  "note": "This is a property of the model, not advice: the change found may be unrealistic, and the inputs held fixed are a choice.",
+  "label_after": "approve",
+  "sentence": "Changing bureau credit score from 681 to 850 would move the chance of decline from 59.5% to 8.3%, which makes the outcome approve. Held fixed in the search: applicant age."
+ },
+ "view": null,
+ "reasons": {
+  "table": {
+   "id": "rt_5f745611edd6957896aa",
+   "version": 1,
+   "status": "retired",
+   "content_hash": "cc8b52cfa73b91874fe37c9db825c350ec9c30dc360945ee0972eace8b70045c",
+   "approved_at": "2026-10-27T22:00:39.738743Z",
+   "approved_by": {
+    "user_id": "usr_87d9df7f1a6b0afe769a",
+    "name": "Kaimei Demo",
+    "role": "owner"
+   }
+  },
+  "adverse": {
+   "outcome": "decline"
+  },
+  "applies": true,
+  "sentence": "4 draft reasons for decline, strongest first. 2 inputs are held for review before these can be used.",
+  "reasons": [
+   {
+    "feature": "debt_to_income",
+    "label": "Total monthly debt / monthly income",
+    "display": "0.38",
+    "attribution": 0.07970604262568466,
+    "position": 1,
+    "reason": "Excessive obligations in relation to income",
+    "code": null,
+    "features": [
+     "debt_to_income"
+    ]
+   },
+   {
+    "feature": "num_delinquencies",
+    "label": "Delinquencies in the last 24 months",
+    "display": "1",
+    "attribution": 0.07483986997713922,
+    "position": 2,
+    "reason": "Delinquent past or present credit obligations with others",
+    "code": null,
+    "features": [
+     "num_delinquencies"
+    ]
+   },
+   {
+    "feature": "credit_score",
+    "label": "Bureau credit score",
+    "display": "681",
+    "attribution": 0.02091959996185499,
+    "position": 4,
+    "reason": "Credit score",
+    "code": null,
+    "features": [
+     "credit_score"
+    ]
+   },
+   {
+    "feature": "employment_years",
+    "label": "Years with current employer",
+    "display": "4 years",
+    "attribution": 0.007326759217992391,
+    "position": 6,
+    "reason": "Length of employment",
+    "code": null,
+    "features": [
+     "employment_years"
+    ]
+   }
+  ],
+  "more": [],
+  "held": [
+   {
+    "feature": "home_ownership",
+    "label": "Housing status",
+    "display": "rent",
+    "attribution": 0.0457483647176272,
+    "position": 3,
+    "why": "unmapped",
+    "sentence": "Housing status pushed toward decline and has no approved reason. Hold for review."
+   },
+   {
+    "feature": "age",
+    "label": "Applicant age",
+    "display": "34 years",
+    "attribution": 0.01277835351529626,
+    "position": 5,
+    "why": "never_state",
+    "sentence": "Applicant age pushed toward decline and must never be given as a reason (a prohibited basis under the Equal Credit Opportunity Act). Escalate for review."
+   }
+  ],
+  "clear": false,
+  "notes": [],
+  "notice": "Draft reasons, drawn from the model's explanation with wording your organization approved. They cover the model's part of the decision only. Whether they meet a notice requirement is for counsel."
+ },
+ "notes": [],
+ "limits": [
+  {
+   "title": "It describes the model, not the world.",
+   "text": "It shows how the model reached its output. On its own it does not show that the decision was fair, lawful or correct."
+  },
+  {
+   "title": "It is not causation.",
+   "text": "It shows how the model's output responds to its inputs, not that changing an input in the real world would change the real outcome."
+  },
+  {
+   "title": "It is not a fairness test.",
+   "text": "A protected characteristic can influence decisions through other inputs that correlate with it, without appearing in the list."
+  },
+  {
+   "title": "It does not check the data.",
+   "text": "If an input is wrong, the explanation faithfully explains the wrong input."
+  },
+  {
+   "title": "It does not see your policy.",
+   "text": "Rules applied outside the model, such as cut-offs, overlays and manual decisions, are not part of the explanation."
+  }
+ ],
+ "notice": "This record states what Kaimei stored and computed. It can support a compliance process; it does not make a decision, a notice or a filing compliant, and it is not legal advice.",
+ "other_explanations": [],
+ "logged_output": null,
+ "fingerprint": {
+  "algorithm": "sha256",
+  "value": "7a79a3b2e04d5f63ab18c34be10963bf138f5ef023c0e710c1309c04cc546fea",
+  "covers": "The decision id, the model and its version, the logged input, output and time, and the explanation's method, options and numbers."
+ }
+}

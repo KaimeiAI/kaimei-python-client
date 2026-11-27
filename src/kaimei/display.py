@@ -117,6 +117,11 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     - an explanation: one row per feature, ranked by |attribution| — the API's ``top_features``
       rows exactly, then the remaining ``attributions`` with ``share`` and ``rank`` computed the
       same way (image explanations list their regions instead);
+    - a decision record: one row per input's effect, strongest first, with the sentence that states it
+      (a record that is not explained yet lists its inputs as recorded);
+    - a reason table: one row per input, with how it is treated and its approved wording;
+    - a model's evidence: one row per requirement, with what is held and what is missing for it;
+    - a model documentation report: one row per finding of its analyses;
     - an insight: the payload's table for its type (importance shares, drift PSI per feature,
       interaction pairs, fragile features, learned rules, one row per grid point of each behaviour
       curve, histogram bins);
@@ -137,13 +142,95 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     kind = str(data.get("object") or "")
     if kind == "explanation":
         return _explanation_rows(data)
+    if kind == "decision_record":
+        factors = [dict(f) for f in data.get("factors") or [] if isinstance(f, Mapping)]
+        if factors:
+            columns = ["rank", "feature", "label", "display", "attribution", "share", "direction", "stderr", "sentence"]
+            return factors, columns
+        inputs = [dict(i) for i in data.get("inputs") or [] if isinstance(i, Mapping)]
+        return inputs, ["name", "label", "value", "exact", "unit", "type"]
+    if kind == "evidence":
+        table = []
+        for framework in data.get("frameworks") or []:
+            for requirement in (framework or {}).get("requirements") or []:
+                parts = [part for part in requirement.get("evidence") or [] if isinstance(part, Mapping)]
+                table.append(
+                    {
+                        "rule": framework.get("name"),
+                        "requirement": requirement.get("title"),
+                        "reference": requirement.get("reference"),
+                        "status": requirement.get("status"),
+                        "held": [part.get("label") for part in parts if part.get("status") == "held"],
+                        "missing": [part.get("label") for part in parts if part.get("status") in ("missing", "stale")],
+                        "stays_with_you": requirement.get("yours"),
+                    }
+                )
+        return table, ["rule", "requirement", "reference", "status", "held", "missing", "stays_with_you"]
+    if kind == "model_report":
+        findings = [dict(f) for f in data.get("findings") or [] if isinstance(f, Mapping)]
+        return findings, ["name", "summary", "severity", "created_at", "status"]
+    if kind == "reason_table":
+        entries = data.get("entries") or {}
+        never = data.get("never_state") or {}
+        table = [
+            {"input": str(name), "treatment": "reason", "reason": (entry or {}).get("reason"), "code": (entry or {}).get("code")}
+            for name, entry in entries.items()
+        ]
+        table += [{"input": str(name), "treatment": "never state", "reason": why or None, "code": None} for name, why in never.items()]
+        table += [
+            {"input": str(name), "treatment": "undecided", "reason": None, "code": None}
+            for name in (data.get("coverage") or {}).get("unmapped") or []
+        ]
+        return table, ["input", "treatment", "reason", "code"]
     if kind == "insight":
         return _insight_rows(data)
     if kind == "model":
         features = [dict(f) for f in data.get("features") or [] if isinstance(f, Mapping)]
         return features, ["name", "type", "unit", "min", "max", "categories", "baseline", "description"]
+    if kind == "retention":
+        table = []
+        for item in data.get("models") or []:
+            if not isinstance(item, Mapping):
+                continue
+            model, held, due = item.get("model") or {}, item.get("held") or {}, item.get("due") or {}
+            table.append(
+                {
+                    "model": model.get("slug"),
+                    "name": model.get("name"),
+                    "keep_days": item.get("keep_days"),
+                    "source": item.get("source"),
+                    "decisions": item.get("decisions"),
+                    "oldest_at": item.get("oldest_at"),
+                    "due_decisions": due.get("decisions"),
+                    "due_explanations": due.get("explanations"),
+                    "held_model": held.get("model"),
+                    "held_decisions": held.get("decisions"),
+                }
+            )
+        return table, ["model", "name", "keep_days", "source", "decisions", "oldest_at", "due_decisions"]
     if kind == "list":
-        items = [flatten(item) for item in data.get("data") or [] if isinstance(item, Mapping)]
+        listed = [item for item in data.get("data") or [] if isinstance(item, Mapping)]
+        if listed and listed[0].get("object") == "audit_event":
+            # One row per entry, with who and what first: the columns a reader of a log looks for.
+            table = [
+                {
+                    "at": e.get("at"),
+                    "who": (e.get("actor") or {}).get("name"),
+                    "actor_type": (e.get("actor") or {}).get("type"),
+                    "action": e.get("action"),
+                    "summary": e.get("summary"),
+                    "target_type": (e.get("target") or {}).get("type"),
+                    "target_id": (e.get("target") or {}).get("id"),
+                    "target": (e.get("target") or {}).get("name"),
+                    "model_id": e.get("model_id"),
+                    "detail": e.get("detail"),
+                    "request_id": e.get("request_id"),
+                    "id": e.get("id"),
+                }
+                for e in listed
+            ]
+            return table, ["at", "who", "action", "summary", "target_type", "target_id"]
+        items = [flatten(item) for item in listed]
         return items, ["id", "object"]
     if kind == "performance":
         return [dict(w) for w in data.get("series") or [] if isinstance(w, Mapping)], list(_SERIES_COLUMNS)
