@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterator, Mapping, Optional, Union
+from typing import Any, Dict, Iterator, Mapping, Optional, Sequence, Union
 from urllib.parse import quote
 
 from .._objects import APIObject
@@ -87,6 +87,62 @@ class Decisions(Resource):
         body: Dict[str, Any] = {"method": method, "options": dict(options) if options else None}
         sent = compact(body)
         return self._post(_path(decision_id) + "/explanation", sent or None)
+
+    def record_policy(
+        self,
+        decision_id: str,
+        *,
+        outcome: str,
+        rules: Optional[Sequence[Mapping[str, Any]]] = None,
+        decided_by: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> APIObject:
+        """Record what was finally decided, and the rules applied outside the model. Returns the record.
+
+        A model's answer is one part of a decision. ``outcome`` is what was decided, in your own word
+        (``"declined"``). Each rule is a dict with a ``name`` and a ``kind``: ``"cutoff"`` turns the model's
+        number into an outcome, ``"overlay"`` decides whatever the model says, ``"manual"`` is a person's
+        review, ``"other"`` is anything else. It may say whether it ``applied`` (default yes), state itself in
+        ``detail``, give its ``effect`` on the decision, the ``reason`` to give the person, and for a review
+        ``by`` whom::
+
+            client.decisions.record_policy(
+                "APP-2026-00417",
+                outcome="declined",
+                rules=[
+                    {"name": "Score cut-off", "kind": "cutoff",
+                     "detail": "Decline when the chance of default is 35% or more", "effect": "declined"},
+                    {"name": "Recent bankruptcy", "kind": "overlay", "applied": False},
+                ],
+            )
+
+        The record then states them, as you recorded them: Kaimei does not apply or check the rules. Calling it
+        again amends what was recorded, and the audit log keeps each change. ``decided_by`` is ``"model"``,
+        ``"rule"`` or ``"person"``; left out, it follows from the rules. Members and reviewers may record it.
+        """
+        body: Dict[str, Any] = {
+            "outcome": outcome,
+            "rules": [dict(rule) for rule in rules] if rules is not None else None,
+            "decided_by": decided_by,
+            "note": note,
+        }
+        return self._put(_path(decision_id) + "/policy", compact(body))
+
+    def remove_policy(self, decision_id: str) -> APIObject:
+        """Remove what was recorded as decided. Returns the record, which goes back to the model's part alone."""
+        return self._delete(_path(decision_id) + "/policy")
+
+    def delete(self, decision_id: str, *, reason: Optional[str] = None) -> APIObject:
+        """Delete a logged decision with every explanation of it and what was recorded as decided.
+
+        This cannot be undone. The audit log keeps that it was deleted, by whom, the ``reason`` you give (an
+        erasure request's reference, say), and the fingerprint its record had. A decision under a hold is not
+        deleted: the call raises a conflict error.
+        """
+        path = _path(decision_id)
+        if reason:
+            path += "?reason=" + quote(str(reason), safe="")
+        return self._delete(path)
 
     def pdf(self, decision_id: str, *, explanation: Optional[str] = None, paper: str = "letter") -> bytes:
         """The record as a PDF document, as bytes. ``paper`` is ``"letter"`` or ``"a4"``.

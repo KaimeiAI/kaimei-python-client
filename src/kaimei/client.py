@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional
 from ._http import DEFAULT_BASE_URL, DEFAULT_TIMEOUT, Transport
 from .resources.analyses import Analyses
 from .resources.api_keys import APIKeys
+from .resources.audit_log import AuditLog
 from .resources.auth import Auth
 from .resources.decisions import Decisions
 from .resources.explanations import Explanations
@@ -18,6 +19,7 @@ from .resources.organizations import Invitations, Organizations
 from .resources.predictions import Predictions
 from .resources.projects import Projects
 from .resources.reason_tables import ReasonTables
+from .resources.retention import Retention
 
 __version__ = "0.12.0"
 
@@ -63,6 +65,8 @@ class Kaimei:
         self.explanations = Explanations(self)
         self.decisions = Decisions(self)
         self.reason_tables = ReasonTables(self)
+        self.retention = Retention(self)
+        self.audit_log = AuditLog(self)
         self.models = Models(self)
         self.projects = Projects(self)
         self.predictions = Predictions(self)

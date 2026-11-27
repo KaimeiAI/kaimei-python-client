@@ -1,5 +1,6 @@
 from .analyses import Analyses
 from .api_keys import APIKeys
+from .audit_log import AuditLog
 from .auth import Auth
 from .decisions import Decisions
 from .explanations import Explanations
@@ -10,11 +11,13 @@ from .organizations import Invitations, Organizations
 from .predictions import Predictions
 from .projects import Projects
 from .reason_tables import ReasonTables
+from .retention import Retention
 
 __all__ = [
     "Analyses",
     "APIKeys",
     "Auth",
+    "AuditLog",
     "Decisions",
     "Explanations",
     "Insights",
@@ -25,4 +28,5 @@ __all__ = [
     "Predictions",
     "Projects",
     "ReasonTables",
+    "Retention",
 ]

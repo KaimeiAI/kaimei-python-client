@@ -584,6 +584,7 @@ def render(data: Mapping[str, Any]) -> str:
         "decision_record": _decision_record,
         "reason_table": _reason_table,
         "evidence": _evidence,
+        "retention": _retention,
         "model_report": _model_report,
         "insight": _insight,
         "model": _model,
@@ -770,6 +771,37 @@ def _decision_record(data: Mapping[str, Any]) -> str:
         said.append(f'<span class="km-faint">In the wording of {_e(which)}. {_e(drafted.get("notice") or "")}</span>')
         out.append(_details("Draft reasons", f'<div class="km-cf">{"".join(said)}</div>', open_=bool(drafted.get("applies"))))
 
+    policy = _map(data.get("policy"))
+    if policy:
+        said = [f"<div>{_e(sentence)}</div>" for sentence in policy.get("sentences") or []]
+        for item in policy.get("reasons") or []:
+            if isinstance(item, Mapping):
+                said.append(
+                    f'<div>{_badge("reason given by a rule")} <b>{_e(item.get("reason"))}</b> '
+                    f'<span class="km-faint">{_e(item.get("rule"))}</span></div>'
+                )
+        if policy.get("note"):
+            said.append(f"<div>Note: {_e(policy.get('note'))}</div>")
+        by = _map(policy.get("recorded_by")).get("name")
+        when = long_date(policy["recorded_at"]) if policy.get("recorded_at") else ""
+        signed = f"Recorded {when}" + (f" by {by}" if by else "")
+        if policy.get("amended_at"):
+            signed += f"; revision {policy.get('revision')}"
+        said.append(f'<span class="km-faint">{_e(signed)}. {_e(policy.get("stated") or "")}</span>')
+        out.append(_details("What was decided", f'<div class="km-cf">{"".join(said)}</div>', open_=True))
+    held = [h for h in (data.get("holds") or []) if isinstance(h, Mapping)]
+    history = [h for h in (data.get("history") or []) if isinstance(h, Mapping)]
+    if held or history:
+        custody = []
+        for hold in held:
+            covers = "this decision" if hold.get("scope") == "decision" else "every record of the model"
+            matter = f" ({_e(hold.get('matter'))})" if hold.get("matter") else ""
+            custody.append(f'<div>{_badge("on hold", "warn")} <b>{_e(hold.get("reason"))}</b>{matter} <span class="km-faint">covers {covers}</span></div>')
+        for entry in history[-12:]:
+            when = long_date(entry["at"]) if entry.get("at") else ""
+            custody.append(f'<div><span class="km-faint">{_e(when)} · {_e(entry.get("by"))}</span> {_e(entry.get("summary"))}</div>')
+        out.append(_details("Custody of this record", f'<div class="km-cf">{"".join(custody)}</div>', open_=bool(held)))
+
     inputs = [i for i in (data.get("inputs") or []) if isinstance(i, Mapping)]
     if inputs:
         table = _table(
@@ -809,6 +841,56 @@ def _decision_record(data: Mapping[str, Any]) -> str:
     left = f'Fingerprint <span class=km-mono title="sha256:{_e(mark)}">sha256:{_e(mark[:16])}…</span>' if mark else ""
     where = "/decisions/" + "/".join(quote(part, safe="") for part in str(data.get("id") or "").split("/"))
     out.append(_foot(left, _link(where, "Open in dashboard") if data.get("id") else ""))
+    return "".join(out)
+
+
+def _period(days: Any) -> str:
+    return "until deleted" if days is None else f"{int(days):,} days"
+
+
+def _retention(data: Mapping[str, Any]) -> str:
+    """An organization's retention schedule: its period, then each model's, what is due and what is held."""
+    default = _map(data.get("default"))
+    models = [m for m in (data.get("models") or []) if isinstance(m, Mapping)]
+    out = [_head("Retention", None, "")]
+    if default:
+        main, sub = f"{int(default.get('keep_days') or 0):,} days", "after a record is logged, it is deleted"
+    else:
+        main, sub = "Kept until deleted", "no period is set"
+    out.append(f'<div class="km-result"><span class="km-value">{_e(main)}</span><span class="km-sub">{_e(sub)}</span></div>')
+    due_d = sum(int(_map(m.get("due")).get("decisions") or 0) for m in models)
+    due_e = sum(int(_map(m.get("due")).get("explanations") or 0) for m in models)
+    holds = int(_map(data.get("holds")).get("active") or 0)
+    badges = [_badge(f"{due_d:,} decisions and {due_e:,} explanations due", "warn" if due_d or due_e else "ok")]
+    badges.append(_badge(f"{holds:,} hold{'' if holds == 1 else 's'} in force", "warn" if holds else ""))
+    if data.get("last_run_at"):
+        badges.append(_badge(f"last applied {long_date(data['last_run_at'])}"))
+    out.append(_badges(badges))
+    rows = []
+    for item in models:
+        model, held, due = _map(item.get("model")), _map(item.get("held")), _map(item.get("due"))
+        whose = {"model": " (its own)", "organization": "", "none": ""}.get(str(item.get("source")), "")
+        hold = "every record" if held.get("model") else (f"{int(held.get('decisions') or 0):,} decisions" if held.get("decisions") else "—")
+        rows.append(
+            [
+                f"<b>{_e(model.get('name'))}</b>",
+                _e(_period(item.get("keep_days")) + whose),
+                _e(f"{int(item.get('decisions') or 0):,}"),
+                _date_cell(item.get("oldest_at")),
+                _e("held" if held.get("model") else f"{int(due.get('decisions') or 0):,}"),
+                _e(hold),
+            ]
+        )
+    if rows:
+        out.append(
+            _table(
+                [("Model", ""), ("Records are kept", ""), ("Decisions", "num"), ("Oldest", "muted"), ("Due now", "num"), ("Holds", "")],
+                rows,
+            )
+        )
+    out.append(f'<div class="km-lead"><span class="km-faint">{_e(data.get("covers") or "")}</span></div>')
+    out.append(_raw_json("JSON", data, note="to_json() has everything"))
+    out.append(_foot(f"Shortest period {int(data.get('minimum_days') or 0)} days", _link("/retention", "Open in dashboard")))
     return "".join(out)
 
 
@@ -1526,6 +1608,28 @@ def _page_table(kind: str, items: Sequence[Mapping[str, Any]]) -> str:
                 ]
             )
         return _table([("Decision id", "mono"), ("Model", "mono muted"), ("Outcome", ""), ("Record", ""), ("Decided", "muted")], rows)
+    if kind == "audit_event":
+        rows = [
+            [
+                _date_cell(e.get("at")),
+                _e(_map(e.get("actor")).get("name") or ""),
+                f"{_e(e.get('summary') or '')}<br><span class=\"km-faint km-mono\">{_e(e.get('action') or '')}</span>",
+            ]
+            for e in items
+        ]
+        return _table([("When", "muted"), ("Who", ""), ("What happened", "wrap")], rows)
+    if kind == "hold":
+        rows = [
+            [
+                _e(h.get("decision_id") or f"every record of {_map(h.get('model')).get('name') or 'a model'}"),
+                _e(h.get("reason") or ""),
+                _e(h.get("matter") or "—"),
+                _badge("in force", "warn") if h.get("active") else _badge("released"),
+                _date_cell(h.get("placed_at")),
+            ]
+            for h in items
+        ]
+        return _table([("Holds", "mono"), ("Why", "wrap"), ("Matter", "mono"), ("State", ""), ("Placed", "muted")], rows)
     if kind == "insight":
         rows = [
             [

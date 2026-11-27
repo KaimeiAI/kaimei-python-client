@@ -173,8 +173,50 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
     if kind == "model":
         features = [dict(f) for f in data.get("features") or [] if isinstance(f, Mapping)]
         return features, ["name", "type", "unit", "min", "max", "categories", "baseline", "description"]
+    if kind == "retention":
+        table = []
+        for item in data.get("models") or []:
+            if not isinstance(item, Mapping):
+                continue
+            model, held, due = item.get("model") or {}, item.get("held") or {}, item.get("due") or {}
+            table.append(
+                {
+                    "model": model.get("slug"),
+                    "name": model.get("name"),
+                    "keep_days": item.get("keep_days"),
+                    "source": item.get("source"),
+                    "decisions": item.get("decisions"),
+                    "oldest_at": item.get("oldest_at"),
+                    "due_decisions": due.get("decisions"),
+                    "due_explanations": due.get("explanations"),
+                    "held_model": held.get("model"),
+                    "held_decisions": held.get("decisions"),
+                }
+            )
+        return table, ["model", "name", "keep_days", "source", "decisions", "oldest_at", "due_decisions"]
     if kind == "list":
-        items = [flatten(item) for item in data.get("data") or [] if isinstance(item, Mapping)]
+        listed = [item for item in data.get("data") or [] if isinstance(item, Mapping)]
+        if listed and listed[0].get("object") == "audit_event":
+            # One row per entry, with who and what first: the columns a reader of a log looks for.
+            table = [
+                {
+                    "at": e.get("at"),
+                    "who": (e.get("actor") or {}).get("name"),
+                    "actor_type": (e.get("actor") or {}).get("type"),
+                    "action": e.get("action"),
+                    "summary": e.get("summary"),
+                    "target_type": (e.get("target") or {}).get("type"),
+                    "target_id": (e.get("target") or {}).get("id"),
+                    "target": (e.get("target") or {}).get("name"),
+                    "model_id": e.get("model_id"),
+                    "detail": e.get("detail"),
+                    "request_id": e.get("request_id"),
+                    "id": e.get("id"),
+                }
+                for e in listed
+            ]
+            return table, ["at", "who", "action", "summary", "target_type", "target_id"]
+        items = [flatten(item) for item in listed]
         return items, ["id", "object"]
     if kind == "performance":
         return [dict(w) for w in data.get("series") or [] if isinstance(w, Mapping)], list(_SERIES_COLUMNS)

@@ -1,0 +1,83 @@
+{
+ "object": "retention",
+ "default": {
+  "keep_days": 760,
+  "set_by": {
+   "type": "user",
+   "name": "Kaimei Demo",
+   "role": "owner"
+  },
+  "set_at": "2026-11-26T23:52:28.872594Z"
+ },
+ "minimum_days": 30,
+ "models": [
+  {
+   "model": {
+    "id": "mdl_cats",
+    "slug": "cats-dogs-v1",
+    "name": "Cats and dogs network",
+    "status": "active"
+   },
+   "own": false,
+   "keep_days": 760,
+   "source": "organization",
+   "decisions": 92,
+   "oldest_at": "2026-11-13T09:03:02.013957Z",
+   "due": {
+    "decisions": 0,
+    "explanations": 0
+   },
+   "held": {
+    "model": false,
+    "decisions": 0
+   }
+  },
+  {
+   "model": {
+    "id": "mdl_credit",
+    "slug": "credit-risk-v3",
+    "name": "Credit risk scorer",
+    "status": "active"
+   },
+   "own": false,
+   "keep_days": 760,
+   "source": "organization",
+   "decisions": 190,
+   "oldest_at": "2024-09-17T23:52:28.967720Z",
+   "due": {
+    "decisions": 3,
+    "explanations": 0
+   },
+   "held": {
+    "model": false,
+    "decisions": 1
+   }
+  },
+  {
+   "model": {
+    "id": "mdl_review",
+    "slug": "review-sentiment-v1",
+    "name": "Review sentiment",
+    "status": "active"
+   },
+   "own": false,
+   "keep_days": 760,
+   "source": "organization",
+   "decisions": 6,
+   "oldest_at": "2026-11-26T02:49:54.091146Z",
+   "due": {
+    "decisions": 0,
+    "explanations": 0
+   },
+   "held": {
+    "model": false,
+    "decisions": 0
+   }
+  }
+ ],
+ "holds": {
+  "active": 1
+ },
+ "last_run_at": "2026-11-26T23:49:19.289733Z",
+ "covers": "A schedule deletes logged decisions, their explanations and what was recorded as decided for them. It never deletes models, analyses, insights, reason tables or the audit log."
+}

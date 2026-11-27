@@ -697,6 +697,46 @@ evidence held toward it, what is missing, and what stays with you. The report pu
 latest finding of each analysis, the records held and that evidence in one document. Both report what is stored;
 neither says that a model, or its use, complies with anything.
 
+### What was decided, holds, retention and the audit log
+
+A model's answer is one part of a decision. Record the rest beside it, and the decision's record states it:
+
+```python
+client.decisions.record_policy(
+    "APP-2026-00417",
+    outcome="declined",
+    rules=[
+        {"name": "Score cut-off", "kind": "cutoff",
+         "detail": "Decline when the chance of default is 35% or more", "effect": "declined"},
+        {"name": "Recent bankruptcy", "kind": "overlay", "applied": False},
+        {"name": "Underwriter review", "kind": "manual", "by": "Senior underwriter",
+         "detail": "Upheld after checking the bureau file", "effect": "declined"},
+    ],
+)
+record = client.decisions.retrieve("APP-2026-00417")
+record.policy.sentences     # the outcome and each rule, stated as you recorded them
+record.history              # what has been done to this record, from the audit log
+```
+
+Kaimei does not apply or check those rules; it states them as recorded, with who recorded them and when.
+
+```python
+client.retention.set(760)                                    # delete records 760 days after they are logged
+client.retention.set_for_model("credit-risk-v3", 2557)       # this model keeps its records longer
+client.retention.run(dry_run=True)                           # what the schedule would delete now
+hold = client.retention.place_hold(decision="LOAN/2026/0042", reason="Customer complaint", matter="CASE-2026-0117")
+client.decisions.delete("APP-2026-00420", reason="Erasure request ER-2026-031")   # refused while a hold covers it
+
+client.audit_log.list(action="decision").to_frame()          # who did what, newest first
+client.audit_log.save_csv("audit-log.csv", since="2026-11-01")
+```
+
+With no schedule, records are kept until someone deletes them. A schedule deletes logged decisions with their
+explanations once they are older than its period; a hold keeps one decision, or every record of a model, whatever
+the schedule says. Setting the schedule and releasing a hold take a signed-in admin (or, for a hold, a
+reviewer): sign in with `client.auth.login`, or do it in the dashboard. An API key is refused. Every deletion, by a person or by the schedule, is entered in the audit log, which
+cannot be edited. How long to keep records is yours to decide with counsel.
+
 ### Reason tables
 
 A reason table holds the wording your organization has approved for why a model decided against someone, and the

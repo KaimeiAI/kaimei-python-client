@@ -22,6 +22,20 @@ raise `NotFoundError`; everything else works as it did.
   cover, requirement by requirement, with what would add the evidence that is missing. **`client.models.report`**
   returns the model documentation report as data, `report_pdf` as a PDF and `save_report_pdf` writes it. Both show
   as cards in a notebook, and `to_frame()` gives one row per requirement, or per finding.
+- **`client.decisions.record_policy(decision_id, outcome=, rules=)`** records what was finally decided and the
+  rules applied outside the model (a cut-off, an overlay rule, a person's review); `remove_policy` removes it. A
+  decision record gains `policy` (the outcome and each rule in a sentence, as recorded), `holds` and `history`,
+  and its card shows them. `record.explanation.reference.digest` is a SHA-256 of the reference rows an explanation
+  of a table was drawn from.
+- **`client.retention`**: `retrieve()` returns the retention schedule model by model, with what is due and what
+  is held; `set(keep_days)`, `set_for_model(model, keep_days)` and `clear_for_model(model)` change it;
+  `run(dry_run=)` applies it now or says what it would delete. `place_hold(decision= or model=, reason=, matter=)`
+  keeps records whatever the schedule says, `holds()` lists them and `release_hold(id)` releases one.
+- **`client.decisions.delete(decision_id, reason=)`** deletes a logged decision with its explanations, and
+  **`client.explanations.delete(id)`** one explanation. Both are refused while a hold covers the record.
+- **`client.audit_log`**: `list(action=, actor=, target_type=, target_id=, model=, since=, until=)` and
+  `iterate()` read who did what in the organization; `csv()` and `save_csv(path)` export it. A page of entries
+  shows as a table, and `to_frame()` gives one row per entry.
 - **`client.reason_tables`**: the approved wording for why a model decided against someone. `save_draft(model,
   adverse_outcome=, entries=, never_state=)` creates or replaces a model's draft, `approve(table_id)` puts it in
   force (a signed-in reviewer, admin or owner), `in_force(model)` and `draft(model)` read them, `list` gives every
