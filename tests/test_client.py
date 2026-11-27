@@ -97,7 +97,7 @@ def test_transport_default() -> None:
 
 
 def test_version() -> None:
-    assert __version__ == "0.14.1"
+    assert __version__ == "0.15.0"
 
 
 def test_permission_denied_alias() -> None:

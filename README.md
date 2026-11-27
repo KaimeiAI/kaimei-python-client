@@ -660,7 +660,7 @@ holdings.runs.sentence
 [(crossing.when, crossing.what) for crossing in holdings.crosses]
 
 # The model summed up in one readable account, written from what is already stored (nothing is run;
-# API 1.5.1; before it, client.models.case_study)
+# API 1.6.0; before it, client.models.case_study)
 summary = client.models.summary("credit-risk-v3")
 [(section.title, section.status, section.summary) for section in summary.sections]
 [gap.title for gap in summary.gaps]  # what is not on file, and gap.how says what would add it

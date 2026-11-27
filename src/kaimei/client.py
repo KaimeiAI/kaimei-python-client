@@ -21,7 +21,7 @@ from .resources.projects import Projects
 from .resources.reason_tables import ReasonTables
 from .resources.retention import Retention
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"
 
 
 class Kaimei:

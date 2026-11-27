@@ -237,6 +237,7 @@ class Models(Resource):
         ``overall`` holds the metrics (accuracy, precision, recall, F1, AUC, Brier, calibration and the confusion
         matrix for a binary model; macro F1 and per-class numbers for multiclass; MAE, RMSE, bias and R² for a
         regression); ``series`` the headline numbers per window; ``coverage`` the share of predictions with an outcome.
+        ``days=0`` reads the whole history, back to the first logged prediction (Kaimei API 1.6.0).
         """
         return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
 
@@ -288,6 +289,7 @@ class Models(Resource):
         bins: int = 24,
     ):
         """What was logged for a model over the last ``days``, and what a drift check would have found along it.
+        ``days=0`` reads the whole history (Kaimei API 1.6.0), with the window widened where it cannot hold it.
 
         ``series`` has one entry per ``hour`` / ``day`` / ``week``: the predictions logged in it, their mean output,
         and each input's PSI for the ``trailing`` rows that were the latest when it ended, with the same thresholds
@@ -348,14 +350,14 @@ class Models(Resource):
     def population(self, model: str, *, days: int = 30, limit: int = 2000):
         """A model's logged predictions one by one, and the ways they group.
 
-        ``rows`` holds the newest ``limit`` predictions of the last ``days`` as columns (``id``, ``time``,
-        ``value``, ``predicted``, ``actual``), and ``fields`` what they can be grouped by: every single-valued
-        input, metadata keys logged beside the predictions that have few values or are numbers, what was
-        predicted, what happened, and whether the two agree. Each field has its ``groups`` (label, rows, mean
-        output, predicted and recorded classes) and ``separation``, the share of the variation in the model's
-        answers that lies between its groups; the fields come most separating first.
-        ``kaimei.display.rows(population)`` and ``population.to_frame()`` give one row per prediction with a
-        column per field, ready for ``groupby``.
+        ``days=0`` reads the whole history (Kaimei API 1.6.0). ``rows`` holds the newest ``limit`` predictions of the
+        last ``days`` as columns (``id``, ``time``, ``value``, ``predicted``, ``actual``), and ``fields`` what they
+        can be grouped by: every single-valued input, metadata keys logged beside the predictions that have few values
+        or are numbers, what was predicted, what happened, and whether the two agree. Each field has its ``groups``
+        (label, rows, mean output, predicted and recorded classes) and ``separation``, the share of the variation in
+        the model's answers that lies between its groups; the fields come most separating first.
+        ``kaimei.display.rows(population)`` and ``population.to_frame()`` give one row per prediction with a column
+        per field, ready for ``groupby``.
 
         Nothing is run and nothing is stored, so this works for any model, one Kaimei cannot run included; a
         model whose inputs are pictures, text or series is grouped by its metadata and its answers.
@@ -374,7 +376,8 @@ class Models(Resource):
         segments: Optional[Sequence[str]] = None,
         factors: bool = True,
     ):
-        """How well a return forecast ranked each date's universe, and whether that is holding up.
+        """How well a return forecast ranked each date's universe, and whether that is holding up, over the last
+        ``days`` (``0`` for the whole history).
 
         For a regression that scores many securities on each date (a model with ``outputs.alpha``, or any
         regression when ``entity`` and ``date`` name the metadata keys that hold the security and the as-of
@@ -472,7 +475,7 @@ class Models(Resource):
 
         Nothing is run and nothing is stored: the model is not called and no analysis is started, so this
         works for any model and counts against no limit. ``summary_markdown`` gives the same as text. It needs API
-        1.5.1; 1.5.0 has it only as the case study (``case_study``).
+        1.6.0; 1.5 has it only as the case study (``case_study``).
         """
         return self._get(f"/v1/models/{model}/summary")
 
