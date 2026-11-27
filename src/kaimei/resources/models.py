@@ -235,6 +235,157 @@ class Models(Resource):
         """
         return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
 
+    def monitoring(
+        self,
+        model: str,
+        *,
+        window: str = "day",
+        days: int = 30,
+        feature: Optional[str] = None,
+        trailing: int = 500,
+        points: int = 1500,
+    ):
+        """What was logged for a model over the last ``days``, and what a drift check would have found along it.
+
+        ``series`` has one entry per ``hour`` / ``day`` / ``week``: the predictions logged in it, their mean output,
+        and each input's PSI for the ``trailing`` rows that were the latest when it ended, with the same thresholds
+        as the drift analysis (``status`` is ``stable``, ``moderate`` or ``significant``). ``levels`` is the PSI that
+        many rows drawn from the reference data itself can give each input: at or under its own level, an input's
+        drift cannot be told from sampling. ``top_feature`` is the input the window's reading comes from, ``chance``
+        its level, and ``beyond_chance`` whether any input drifted. A window of few rows scores high by sampling
+        alone, so read ``status`` together with it.
+        ``features`` ranks the inputs by their highest PSI. ``tape`` draws one input in full (``feature``, or the most
+        drifted): up to ``points`` logged predictions as ``[id, time, input value, output]``, the reference data's
+        histogram and each window's. ``insights`` are the stored drift and performance insights in the range.
+
+        Nothing is run and nothing is stored. Drift needs reference data and inputs that are single values (a table);
+        without them ``drift_unavailable`` says why and the traffic is still returned.
+        """
+        return self._get(
+            f"/v1/models/{model}/monitoring",
+            compact({"window": window, "days": days, "feature": feature, "trailing": trailing, "points": points}),
+        )
+
+    def population(self, model: str, *, days: int = 30, limit: int = 2000):
+        """A model's logged predictions one by one, and the ways they group.
+
+        ``rows`` holds the newest ``limit`` predictions of the last ``days`` as columns (``id``, ``time``,
+        ``value``, ``predicted``, ``actual``), and ``fields`` what they can be grouped by: every single-valued
+        input, metadata keys logged beside the predictions that have few values or are numbers, what was
+        predicted, what happened, and whether the two agree. Each field has its ``groups`` (label, rows, mean
+        output, predicted and recorded classes) and ``separation``, the share of the variation in the model's
+        answers that lies between its groups; the fields come most separating first.
+        ``kaimei.display.rows(population)`` and ``population.to_frame()`` give one row per prediction with a
+        column per field, ready for ``groupby``.
+
+        Nothing is run and nothing is stored, so this works for any model, one Kaimei cannot run included; a
+        model whose inputs are pictures, text or series is grouped by its metadata and its answers.
+        """
+        return self._get(f"/v1/models/{model}/population", {"days": days, "limit": limit})
+
+    def similar(
+        self,
+        model: str,
+        input: Optional[Mapping[str, Any]] = None,
+        prediction_id: Optional[str] = None,
+        *,
+        k: int = 10,
+        source: str = "reference",
+    ):
+        """The rows Kaimei already holds that are most like one case, and what was true of them.
+
+        The case is ``input`` (its inputs) or ``prediction_id`` (a logged prediction); one of the two. It is
+        compared with the model's reference rows (``source="reference"``) or its newest 2,000 logged
+        predictions (``source="predictions"``), and the ``k`` nearest (50 at most) come back as ``cases``,
+        nearest first. Each has ``id`` (a reference row's position, or a prediction's id), ``distance``,
+        ``similarity`` (one less the distance), its ``inputs``, each input's own ``gaps`` and the inputs it
+        ``differs`` on most, with both values. A reference row carries its ``label``; a logged prediction its
+        ``output``, the class ``predicted``, its ``value`` and its recorded ``outcome``. ``summary`` counts
+        those per class (or gives the mean and range of numbers) and says it in a ``sentence``: "Of the 10
+        reference rows most like this case, 7 were labelled decline and 3 approve."
+        ``kaimei.display.rows(similar)`` and ``similar.to_frame()`` give one row per case, with an
+        ``input:<name>`` column per input.
+
+        Two rows are compared input by input: a number by its gap in units of the width of the middle nine
+        tenths of the reference rows' values (at most 1), a category or a yes/no by whether they match, and
+        a value missing on one side only as far as can be. The distance is the mean over the inputs, each
+        weighing the same. A value that is ``None`` or NaN is missing.
+
+        Nothing is run and nothing is stored, so a key that only reads can call it. A model whose inputs are
+        not all single values (a picture, a text, a series) answers ``422``.
+        """
+        if (input is None) == (prediction_id is None):
+            raise ValueError("Pass either input (the case's inputs) or prediction_id (a logged prediction).")
+        row = None
+        if input is not None:
+            # A gap in a table is NaN there and null on the wire: the value is missing.
+            row = {str(key): (None if isinstance(value, float) and value != value else value) for key, value in dict(input).items()}
+        return self._post(
+            f"/v1/models/{model}/similar",
+            compact({"input": row, "prediction_id": prediction_id, "k": k, "source": source}),
+        )
+
+    def holdings(self, model: str):
+        """What Kaimei holds for a model and what stays with you, read from what is stored.
+
+        ``runs`` says who runs the model (``by``: ``kaimei``, ``your_endpoint``, ``your_agent`` or ``nobody``)
+        in a ``sentence``. ``items`` covers the weights and structure, the input and output schema, reference
+        rows, logged predictions, recorded outcomes, explanations, insights and whether a credential for your
+        endpoint is held (never its value); each has ``held`` (``yes``, ``partly`` or ``no``), a ``count`` in
+        its ``unit``, the ``bytes`` stored where that is measured, and a ``detail``. ``crosses`` says what
+        travels between your network and Kaimei ``when`` a prediction, an explanation or an analysis is asked
+        for and when a prediction is logged. ``kaimei.display.rows(holdings)`` and ``holdings.to_frame()``
+        give one row per item.
+
+        Nothing is run and nothing is stored: counts and sizes are asked of the database.
+        """
+        return self._get(f"/v1/models/{model}/holdings")
+
+    def case_study(self, model: str):
+        """A model written up as a case study, from what Kaimei already holds about it.
+
+        ``headline`` says what the model is, ``facts`` are the key numbers, and ``sections`` are always the same
+        ten in order: ``overview``, ``drivers``, ``behaviour``, ``interactions``, ``example`` (one stored
+        explanation, the one whose answer is nearest the median logged answer), ``outputs``, ``robustness``,
+        ``population``, ``drift`` and ``performance``. Each has a ``summary`` of one to three sentences built
+        from the numbers, a ``status`` (``ready``, ``stale`` when its insight is older than 30 days, or
+        ``missing``), ``applies`` (false when this kind of model cannot have the section), a ``table`` of its key
+        numbers and the ``data`` a chart needs. ``gaps`` lists what is not on file and what would add it.
+        ``kaimei.display.rows(study)`` and ``study.to_frame()`` give one row per section.
+
+        Nothing is run and nothing is stored: the model is not called and no analysis is started, so this
+        works for any model and counts against no limit. ``case_study_markdown`` gives the same as text.
+        """
+        return self._get(f"/v1/models/{model}/case-study")
+
+    def case_study_markdown(self, model: str) -> str:
+        """The model's case study (see ``case_study``) as a Markdown document, ready for a wiki or a model card.
+
+        A title, the facts as a table, a heading per section with its sentences and a table of its key numbers,
+        and the list of what is not on file. It holds no HTML.
+        """
+        raw = self._client._request("GET", f"/v1/models/{model}/case-study", params={"format": "markdown"}, raw=True)
+        return bytes(raw).decode("utf-8")
+
+    def compare(self, model: str, other: str, *, source: str = "reference", limit: int = 500):
+        """Run two models on the same rows: how far they agree, how each scores, and where they part.
+
+        The rows are ``model``'s: its reference rows (``source="reference"``) or the inputs of its newest logged
+        predictions (``source="predictions"``), ``limit`` of them at most. Everything given per model is a pair,
+        ``model`` first: ``models``, ``scores`` (accuracy and AUC, or MAE and R², on the rows whose truth is
+        known), and in ``rows`` the ``values`` and ``decisions``. ``agreement`` has ``rate`` (the share of rows
+        decided the same way; classifiers only), ``correlation``, ``mean_gap`` and ``max_gap``; ``differ_most``
+        lists the rows furthest apart; ``importance`` pairs the two models' global importance when both have it
+        stored. ``kaimei.display.rows(comparison)`` and ``comparison.to_frame()`` give one row per row compared,
+        with each model's value and decision, the ``gap`` and an ``input:<name>`` column per input.
+
+        The two must take the same inputs and both predict a number or one of the same classes; otherwise the
+        API answers ``422`` and says what differs. Both models are run and nothing is stored, so a key
+        that only reads can call it (with ``source="predictions"`` it must be able to read predictions). It has
+        hourly and daily allowances of its own and is refused once the month's analyses are used up.
+        To see why the two answer a row as they do, explain that row with each (``client.explanations.create``).
+        """
+        return self._get(f"/v1/models/{model}/comparison", {"with": other, "source": source, "limit": limit})
     def evidence(self, model: str, *, fresh_days: Optional[int] = None) -> APIObject:
         """What Kaimei holds for a model against the requirements its guides cover, requirement by requirement.
 
@@ -295,6 +446,13 @@ class Models(Resource):
         )
 
     def reference_data(self, model: str, *, sample: int = 5):
+        """A summary of a model's reference data: how many ``rows`` it has, whether they have labels, and
+        the first ``sample`` of them (up to 100) under ``sample``.
+
+        ``sample_labels`` holds the label stored with each of those rows, in the same order, and ``None`` for a
+        row stored without one, so ``zip(summary.sample, summary.sample_labels)`` pairs each row with what
+        happened. An API before 1.5.0 sends no ``sample_labels``.
+        """
         return self._get(f"/v1/models/{model}/reference-data", {"sample": sample})
 
     def delete_reference_data(self, model: str):

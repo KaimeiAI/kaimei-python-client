@@ -458,7 +458,7 @@ An agent answers one job at a time, and a request waits for it up to the model's
 
 ### Results in a notebook
 
-A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an analysis, or a page of them) shows as a Kaimei card: the mark, the dashboard's colours and the dashboard's numbers, formatted by the same rules. An explanation card has the prediction, the attribution bars (hover a bar for its full precision), the probabilities, the counterfactual, and the input and JSON behind collapsible sections; an image explanation adds the photo, the evidence heatmap and the focus, with its regions. Insight cards draw importance shares, drift by status, behaviour curves, the output histogram and the learned rules the way the dashboard's cards do. The cards are plain HTML and CSS, so they render in JupyterLab, classic Jupyter, VS Code and Colab, follow the host's dark theme, and link back to the record in the dashboard. Each element also carries its style inline, so a notebook committed with its outputs keeps the cards' layout on GitHub, whose viewer drops `<style>` blocks (there they show in the light theme).
+A record that ends a Jupyter cell (an explanation, an insight, a model, a prediction, an analysis, a page of them, or one of the readings of a model's log named below) shows as a Kaimei card: the mark, the dashboard's colours and the dashboard's numbers, formatted by the same rules. An explanation card has the prediction, the attribution bars (hover a bar for its full precision), the probabilities, the counterfactual, and the input and JSON behind collapsible sections; an image explanation adds the photo, the evidence heatmap and the focus, with its regions. Insight cards draw importance shares, drift by status, behaviour curves, the output histogram and the learned rules the way the dashboard's cards do. What a model's log says has cards too, and each leads with the sentence a person would say about it, then the few numbers behind it: a monitoring history (`models.monitoring`: the latest window's reading, one bar per window, the inputs by peak PSI), a population (`models.population`: the field that separates the answers most, and its groups), a comparison of two models (`models.compare`: how far they agree, each one's score, the rows they differ on most), similar cases (`models.similar`), what Kaimei holds for a model (`models.holdings`: what stays with you beside what Kaimei holds), a model report (`models.report`) and several explanation methods on one input (`explanations.compare_methods`: each method's top three inputs on one scale, with its cost). The cards are plain HTML and CSS, so they render in JupyterLab, classic Jupyter, VS Code and Colab, follow the host's dark theme, and link back to the record in the dashboard. Each element also carries its style inline, so a notebook committed with its outputs keeps the cards' layout on GitHub, whose viewer drops `<style>` blocks (there they show in the light theme).
 
 ```python
 explanation = client.explanations.create(model="titanic-forest", input=passenger, method="shap")
@@ -620,6 +620,11 @@ client.predictions.create(model="credit-risk-v3", input={...}, output={"score": 
 # Explain one input. method is "shap" (KernelSHAP), "shapley", or "lime".
 client.explanations.create(model="credit-risk-v3", input={...}, method="shap")
 
+# The same input explained with every method the model lists (one explanation each, no prediction logged)
+comparison = client.explanations.compare_methods("credit-risk-v3", {...})
+comparison.agreement.sentence     # "All three put credit_score first and agree on the top three."
+comparison.agreement.rank_correlation, [(c.label, c.n_evals, c.latency_ms, c.exact) for c in comparison.costs]
+
 # Outcomes come back later: attach what really happened to the logged predictions
 prediction = client.predictions.create(model="credit-risk-v3", input={...}, output={"label": "approve", "probability": 0.81})
 client.predictions.log_actual(prediction.id, "default")
@@ -630,6 +635,40 @@ report = client.models.performance("credit-risk-v3", window="week", days=90)
 
 # Has quality dropped by more than chance explains? Also part of every full analysis.
 client.analyses.create(model="credit-risk-v3", type="performance")
+
+# When did an input start to drift? What a drift check would have found at the end of every day, from the log (API 1.5.0)
+history = client.models.monitoring("credit-risk-v3", window="day", days=30)
+[(day.start, day.status, day.top_feature) for day in history.series if day.status == "significant"]
+
+# Every logged prediction as a row, and what separates the model's answers most (API 1.5.0)
+population = client.models.population("credit-risk-v3", days=30)
+[(field.name, field.separation) for field in population.fields[:3]]
+population.to_frame().groupby("input:home_ownership")["value"].mean()
+
+# The reference rows most like one applicant, and what was true of them (nothing is run; API 1.5.0)
+similar = client.models.similar("credit-risk-v3", {"income": 52000, "credit_score": 640, "utilization": 0.71,
+    "debt_to_income": 0.41, "loan_amount": 21000, "employment_years": 2, "num_delinquencies": 1, "age": 31,
+    "home_ownership": "rent"})
+similar.summary.sentence          # "Of the 10 reference rows most like this case, 7 were labelled decline and 3 approve."
+[(case.id, case.similarity, case.label, [d.feature for d in case.differs]) for case in similar.cases]
+client.models.similar("credit-risk-v3", prediction_id="pred_…", source="predictions")  # among logged predictions
+
+# What Kaimei holds for a model and what stays with you, from the stored state (API 1.5.0)
+holdings = client.models.holdings("credit-risk-v3")
+holdings.runs.sentence
+[(item.label, item.held, item.count, item.bytes) for item in holdings.items]
+[(crossing.when, crossing.what) for crossing in holdings.crosses]
+
+# The model as one readable case study, written from what is already stored (nothing is run; API 1.5.0)
+study = client.models.case_study("credit-risk-v3")
+[(section.title, section.status, section.summary) for section in study.sections]
+[gap.title for gap in study.gaps]  # what is not on file, and gap.how says what would add it
+open("credit-risk-v3.md", "w", encoding="utf-8").write(client.models.case_study_markdown("credit-risk-v3"))
+
+# Two models on the same rows (two versions, or a champion and a challenger): do they agree, and where not? (API 1.5.0)
+both = client.models.compare("loan-forest-v1", "loan-scorecard-v1")
+both.agreement.rate, [(m.name, s.auc) for m, s in zip(both.models, both.scores)]
+both.to_frame().sort_values("gap", ascending=False).head()  # the rows they answer most differently
 
 # Study the model as a whole, then read the insights
 analysis = client.analyses.create(model="credit-risk-v3", type="full")

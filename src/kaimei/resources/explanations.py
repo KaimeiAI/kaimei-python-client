@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Mapping, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
 
-from .._objects import APIObject
+from .._objects import APIObject, wrap
 from ._base import Page, Resource, compact
 
 
@@ -50,6 +50,58 @@ class Explanations(Resource):
         }
         body.update(extra)
         return self._post("/v1/explanations", compact(body))
+
+    def compare_methods(
+        self,
+        model: str,
+        input: Mapping[str, Any],
+        methods: Optional[Sequence[str]] = None,
+        *,
+        prediction_id: Optional[str] = None,
+        options: Optional[Mapping[str, Any]] = None,
+        top: int = 5,
+    ) -> APIObject:
+        """Explain one input with several methods, and say how far they agree.
+
+        ``methods`` defaults to every method the API lists for the model (``explain_methods``, without ``auto``,
+        which is one of the others under another name). Each method is one call to :meth:`create`, so one
+        explanation of the month's allowance. No prediction is logged for them: pass ``prediction_id`` to attach
+        them all to a prediction already in the log. ``options`` go to every call (``target_class``, ``seed``).
+
+        Returns the ``explanations``, one per method in order, and what they say together:
+
+        - ``agreement``: a ``sentence`` that follows the numbers ("All three put credit_score first and agree on
+          the top three."), the ``rank_correlation`` (Spearman's, over every input's absolute attribution,
+          averaged over the pairs of methods), the input each method puts ``first``, ``same_first``, and the
+          inputs they push ``opposed`` ways;
+        - ``rows``: one per input any method ranks in its top ``top``, by mean rank, with each method's
+          attribution and rank (``pandas.DataFrame(comparison.to_dict()["rows"])`` is the table);
+        - ``costs``: each method's ``n_evals``, ``latency_ms`` and whether it is ``exact``, with how in ``detail``.
+        """
+        from .._methods import comparable, summarize
+
+        if methods is None:
+            listed = self._client._request("GET", f"/v1/models/{model}").get("explain_methods") or []
+            methods = comparable([str(method) for method in listed])
+            if not methods:
+                raise ValueError(f"The API lists no explanation method for model {model}, so there is nothing to compare.")
+        methods = list(methods)
+        if len(methods) < 2:
+            raise ValueError(f"Comparing methods needs at least two, and model {model} has {methods}.")
+        shared = {"log_prediction": False, **dict(options or {})}
+        explanations = [
+            self.create(model=model, input=input, prediction_id=prediction_id, method=method, options=shared).to_dict()
+            for method in methods
+        ]
+        return wrap(
+            {
+                "object": "method_comparison",
+                "model": model,
+                "methods": [str(item.get("method")) for item in explanations],
+                "explanations": explanations,
+                **summarize(explanations, top=top),
+            }
+        )
 
     def retrieve(self, explanation_id: str) -> APIObject:
         return self._get(f"/v1/explanations/{explanation_id}")

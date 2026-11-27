@@ -4,7 +4,9 @@ A record the client returns (an explanation, an insight, a model, a page of pred
 shown in a Jupyter cell the way its dashboard card reads: the Kaimei mark, the dashboard's colours,
 the same numbers formatted the same way, with hover details and collapsible sections. Nothing in
 the card needs a script, so it renders in JupyterLab, classic Jupyter, VS Code and Colab, and it
-follows the host's dark theme.
+follows the host's dark theme. A monitoring history, a population, a comparison of two models,
+similar cases, what Kaimei holds for a model and a comparison of explanation methods each lead with
+the sentence that says what was found, then the numbers behind it.
 
 Three ways to get the plain data instead::
 
@@ -84,7 +86,12 @@ def mimebundle(record: Any) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         text = json.dumps(data, indent=2, default=str, ensure_ascii=False)
         root = str(data.get("object"))
         return {"application/json": data, "text/plain": text}, {"application/json": {"expanded": True, "root": root}}
-    return {"text/html": html(data), "text/plain": repr(record)}, {}
+    try:
+        card = html(data)
+    except Exception:
+        # A record in a shape no card expects still shows: a cell never fails over how its result is drawn.
+        return {"text/plain": repr(record)}, {}
+    return {"text/html": card, "text/plain": repr(record)}, {}
 
 
 # --- tables ---------------------------------------------------------------------------------------
@@ -120,6 +127,13 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
       curve, histogram bins);
     - a model: its features;
     - a performance report: one row per window;
+    - a monitoring history: one row per window, with each input's PSI as a ``drift.<input>`` column;
+    - a population: one row per logged prediction, with a column per field holding the row's group;
+    - similar cases: one row per case, nearest first, with what is known about it and an ``input:<name>``
+      column per input; what Kaimei holds for a model: one row per item;
+    - a comparison: one row per row both models answered, with each one's value and decision, the gap
+      between them and an ``input:<name>`` column per input;
+    - a model report: one row per section, with its status and its summary;
     - a page: one row per item, nested fields flattened to dotted columns (``output.label``,
       ``attributions.Age``);
     - anything else: the record as one flattened row.
@@ -220,8 +234,131 @@ def rows(record: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
         return items, ["id", "object"]
     if kind == "performance":
         return [dict(w) for w in data.get("series") or [] if isinstance(w, Mapping)], list(_SERIES_COLUMNS)
+    if kind == "monitoring":
+        # One row per window; each input's PSI is a column of its own (``drift.temperature``).
+        windows = [flatten(w) for w in data.get("series") or [] if isinstance(w, Mapping)]
+        return windows, list(_MONITORING_COLUMNS)
+    if kind == "population":
+        return _population_rows(data), list(_POPULATION_COLUMNS)
+    if kind in ("similar_cases", "model_holdings"):
+        from ._cases import holdings_rows, similar_rows
+
+        return similar_rows(data) if kind == "similar_cases" else holdings_rows(data)
+    if kind == "comparison":
+        return _comparison_rows(data), list(_COMPARISON_COLUMNS)
+    if kind == "model_case_study":
+        # One row per section, in the report's order: what it says, and whether it is on file.
+        sections = [s for s in data.get("sections") or [] if isinstance(s, Mapping)]
+        return [{column: s.get(column) for column in _REPORT_COLUMNS} for s in sections], list(_REPORT_COLUMNS)
     return [flatten(data)], []
 
+
+#: A model report's columns: one row per section.
+_REPORT_COLUMNS = ("key", "title", "status", "applies", "as_of", "summary")
+
+
+#: A comparison's columns, the two models' answers first; one column per input (``input:<name>``) follows.
+_COMPARISON_COLUMNS = ("id", "value", "other_value", "gap", "decision", "other_decision", "agree", "actual")
+
+
+def _comparison_rows(data: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """One row per row both models answered: the first model's value and decision, the other's, and the inputs."""
+
+    def mapping(value: Any) -> Mapping[str, Any]:
+        return value if isinstance(value, Mapping) else {}
+
+    columns = mapping(data.get("rows"))
+    classes = list(mapping(data.get("output")).get("classes") or [])
+    inputs = mapping(columns.get("inputs"))
+
+    def pair(name: str) -> Tuple[List[Any], List[Any]]:
+        both = columns.get(name)
+        if isinstance(both, list) and len(both) == 2 and all(isinstance(side, list) for side in both):
+            return both[0], both[1]
+        return [], []
+
+    def at(column: Any, index: int) -> Any:
+        return column[index] if isinstance(column, list) and index < len(column) else None
+
+    def named(position: Any) -> Any:
+        # A classifier's rows refer to its classes by position; a regression's truth is its number.
+        if classes and isinstance(position, int) and not isinstance(position, bool):
+            return classes[position] if 0 <= position < len(classes) else None
+        return position
+
+    def number(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    values, decisions = pair("values"), pair("decisions")
+    table: List[Dict[str, Any]] = []
+    for index, identifier in enumerate(columns.get("id") or []):
+        first, second = at(values[0], index), at(values[1], index)
+        chose, other_chose = named(at(decisions[0], index)), named(at(decisions[1], index))
+        row: Dict[str, Any] = {
+            "id": identifier,
+            "value": first,
+            "other_value": second,
+            "gap": abs(second - first) if number(first) and number(second) else None,
+            "decision": chose,
+            "other_decision": other_chose,
+            # Whether the two decide the row the same way; a regression has no decision to agree on.
+            "agree": chose == other_chose if chose is not None and other_chose is not None else None,
+            "actual": named(at(columns.get("actual"), index)),
+        }
+        for name, column in inputs.items():
+            row[f"input:{name}"] = at(column, index)
+        table.append(row)
+    return table
+
+
+#: A population's columns, the prediction first; one column per field (by its key) follows.
+_POPULATION_COLUMNS = ("id", "time", "value", "predicted", "actual")
+
+
+def _population_rows(data: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """One row per logged prediction: classes by name, and under each field's key the group the row is in."""
+
+    def mapping(value: Any) -> Mapping[str, Any]:
+        return value if isinstance(value, Mapping) else {}
+
+    columns = mapping(data.get("rows"))
+    classes = list(mapping(data.get("output")).get("classes") or [])
+    placed = mapping(columns.get("groups"))
+    fields = [
+        (str(f.get("key")), [g.get("label") for g in f.get("groups") or [] if isinstance(g, Mapping)])
+        for f in data.get("fields") or []
+        if isinstance(f, Mapping) and f.get("key")
+    ]
+
+    def at(name: str, index: int) -> Any:
+        column = columns.get(name)
+        return column[index] if isinstance(column, list) and index < len(column) else None
+
+    def named(position: Any) -> Any:
+        # A classifier's rows refer to its classes by position; a regression's outcome is its number.
+        if classes and isinstance(position, int) and not isinstance(position, bool):
+            return classes[position] if 0 <= position < len(classes) else None
+        return position
+
+    table: List[Dict[str, Any]] = []
+    for index, identifier in enumerate(columns.get("id") or []):
+        row: Dict[str, Any] = {
+            "id": identifier,
+            "time": at("time", index),
+            "value": at("value", index),
+            "predicted": named(at("predicted", index)),
+            "actual": named(at("actual", index)),
+        }
+        for key, labels in fields:
+            group = placed.get(key)
+            position = group[index] if isinstance(group, list) and index < len(group) else None
+            row[key] = labels[position] if isinstance(position, int) and 0 <= position < len(labels) else None
+        table.append(row)
+    return table
+
+
+#: A monitoring history's columns, the window first; the PSI of each input follows.
+_MONITORING_COLUMNS = ("start", "end", "predictions", "output.mean", "rows", "status", "beyond_chance", "overall_psi", "chance", "top_feature")
 
 #: A performance series' columns, the window first.
 _SERIES_COLUMNS = ("start", "end", "n", "accuracy", "auc", "precision", "recall", "f1", "macro_f1", "mae", "rmse", "r2")

@@ -3,7 +3,9 @@
 ``render(record)`` turns a record the API returned (an explanation, insight, model, prediction,
 analysis, a page of them, ...) into one self-contained HTML card: the Kaimei mark, the dashboard's
 colours and type, and the dashboard's numbers formatted by the same rules (its ``fmtSigned``,
-``pct``, ``outputParts``, ``compact``, ... are ported below, name for name).
+``pct``, ``outputParts``, ``compact``, ... are ported below, name for name). What a model's log says
+(a monitoring history, a population, a comparison of two models, similar cases, what Kaimei holds,
+several explanation methods on one input) leads with the sentence a person would say about it.
 
 Everything is HTML and CSS. Hover highlights, tooltips (``title`` attributes and SVG ``<title>``)
 and collapsible ``<details>`` sections work wherever a notebook renders HTML, with no script to
@@ -51,7 +53,7 @@ CSS = (
     "--indigo:#4566e8;--blue:#6b8cff;--ok:#0f8f5b;--warn:#9a6700;--serious:#c2410c;--bad:#d14b7a;"
     "--ok-soft:rgba(15,143,91,.12);--warn-soft:rgba(154,103,0,.12);--serious-soft:rgba(194,65,12,.12);"
     "--bad-soft:rgba(209,75,122,.12);--info-soft:rgba(107,140,255,.14);--wash:rgba(18,20,28,.04);"
-    "--track:rgba(18,20,28,.08);--midline:rgba(18,20,28,.18);--series-1:#4566e8;--series-2:#0891b2;"
+    "--track:rgba(18,20,28,.08);--midline:rgba(18,20,28,.18);--series-1:#4566e8;--series-2:#0891b2;--series-3:#f97316;"
     "--hover:rgba(107,140,255,.06);--shadow:0 1px 2px rgba(18,20,28,.05);"
     'font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:13px;line-height:1.45;'
     "color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px 18px 14px;"
@@ -65,7 +67,7 @@ CSS = (
     "--warn:#ffc857;--serious:#ff9b6a;--bad:#ff6b8a;--ok-soft:rgba(61,214,140,.14);--warn-soft:rgba(255,200,87,.14);"
     "--serious-soft:rgba(255,155,106,.14);--bad-soft:rgba(255,107,138,.14);--info-soft:rgba(107,140,255,.16);"
     "--wash:rgba(255,255,255,.03);--track:rgba(255,255,255,.06);--midline:rgba(255,255,255,.22);--series-1:#6b8cff;"
-    "--series-2:#3ec8ff;--hover:rgba(255,255,255,.035);--shadow:0 1px 2px rgba(0,0,0,.35)}"
+    "--series-2:#3ec8ff;--series-3:#ffb04d;--hover:rgba(255,255,255,.035);--shadow:0 1px 2px rgba(0,0,0,.35)}"
     f".km .km-mono{{font-family:{_MONO}}}"
     ".km-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 12px;"
     "padding-bottom:10px;border-bottom:1px solid var(--line)}"
@@ -177,6 +179,37 @@ CSS = (
     f".km-prob .km-val{{text-align:right;font-variant-numeric:tabular-nums;font-family:{_MONO};font-size:11.5px}}"
     ".km-desc{font-size:12.5px;color:var(--muted);margin:0 0 10px}"
     ".km-error{color:var(--bad);font-size:12.5px;margin:0 0 10px}"
+    # The cards of what a model's log says (monitoring, population, comparison, similar cases, holdings, methods).
+    ".km-say{font-size:15px;line-height:1.4;font-weight:500;letter-spacing:-.01em;color:var(--text);margin:2px 0 10px;max-width:680px}"
+    ".km-win{position:relative;display:flex;align-items:flex-end;gap:2px;height:64px;border-bottom:1px solid var(--line2)}"
+    ".km-win.dense{gap:0}"
+    ".km-win-bar{flex:1 1 0%;min-width:1px;border-radius:2px 2px 0 0}"
+    ".km-win-line{position:absolute;left:0;right:0;height:0;border-top:1px dashed var(--faint);opacity:.6}"
+    ".km-tone-stable{background:var(--ok)}.km-tone-moderate{background:var(--warn)}.km-tone-significant{background:var(--bad)}"
+    ".km-tone-chance{background:var(--faint)}.km-tone-none{background:var(--track)}.km-tone-traffic{background:var(--series-1)}"
+    ".km-axis{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:var(--faint);margin:3px 0 8px}"
+    ".km .km-table td.bar,.km .km-table th.bar{width:30%}"
+    ".km .km-table th.fold{white-space:normal;max-width:132px}"
+    ".km .km-table td.said{white-space:normal;line-height:1.55}"
+    ".km-track.cell{min-width:110px}"
+    ".km-split{display:flex;gap:2px;height:10px;min-width:110px;border-radius:3px;overflow:hidden}"
+    ".km-split i{display:block;height:100%;min-width:2px;border-radius:2px}"
+    ".km-mix-0{background:var(--series-1)}.km-mix-1{background:var(--series-2)}.km-mix-2{background:var(--series-3)}"
+    ".km-mix-x{background:var(--faint)}"
+    ".km-gap{position:relative;height:14px;min-width:120px}"
+    ".km-gap-track{position:absolute;left:0;right:0;top:6px;height:2px;border-radius:1px;background:var(--track)}"
+    ".km-gap-line{position:absolute;top:6px;height:2px;background:var(--midline)}"
+    # The sizes below count their borders: said here, because ``.km *{box-sizing}`` is not there without the stylesheet.
+    ".km-pin{position:absolute;top:1px;width:12px;height:12px;margin-left:-6px;border-radius:50%;border:2px solid var(--bg);"
+    "box-sizing:border-box}"
+    ".km-sides{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 4px}"
+    ".km-side{flex:1 1 280px;min-width:0;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:8px 12px 6px;"
+    "box-sizing:border-box}"
+    ".km-side-h{font-size:13px;font-weight:600;color:var(--text);margin:0 0 4px}"
+    ".km-item{padding:5px 0;font-size:12.5px;border-top:1px solid var(--line)}"
+    f".km-measure{{font-family:{_MONO};font-size:11.5px;color:var(--muted);margin-left:6px;white-space:nowrap}}"
+    ".km-note{display:block;font-size:11.5px;color:var(--muted);margin-top:1px}"
+    ".km-method{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:12px 0 6px;font-size:13px;font-weight:600;color:var(--text)}"
 )
 
 METHOD_LABEL = {
@@ -450,17 +483,27 @@ def _kv_table(items: Iterable[Tuple[str, str]]) -> str:
     return f'<div class="km-wrap"><table class="km-table"><tbody>{rows}</tbody></table></div>'
 
 
-def _diverging_bars(rows: Sequence[Tuple[str, Optional[str], float]], *, legend: Optional[Tuple[str, str]] = None) -> str:
-    """The dashboard's ``AttributionBars``: ``rows`` are ``(name, input text or None, value)``."""
+def _diverging_legend(legend: Tuple[str, str]) -> str:
+    return (
+        '<div class="km-legend"><span><i style="background:linear-gradient(90deg,#3ec8ff,#6b8cff)"></i>'
+        f"{_e(legend[0])}</span><span><i style=\"background:linear-gradient(90deg,#ff6bb5,#c86bff)\"></i>{_e(legend[1])}</span></div>"
+    )
+
+
+def _diverging_bars(
+    rows: Sequence[Tuple[str, Optional[str], float]], *, legend: Optional[Tuple[str, str]] = None, scale: Optional[float] = None
+) -> str:
+    """The dashboard's ``AttributionBars``: ``rows`` are ``(name, input text or None, value)``.
+
+    ``scale`` is the value a full bar stands for, for several sets of bars drawn on one scale; without it
+    the largest of ``rows`` fills the bar.
+    """
     if not rows:
         return '<div class="km-faint">No attributions yet.</div>'
-    largest = max(max(abs(v) for _, _, v in rows), 1e-9)
+    largest = max(max(abs(v) for _, _, v in rows), scale or 0.0, 1e-9)
     out = []
     if legend:
-        out.append(
-            '<div class="km-legend"><span><i style="background:linear-gradient(90deg,#3ec8ff,#6b8cff)"></i>'
-            f"{_e(legend[0])}</span><span><i style=\"background:linear-gradient(90deg,#ff6bb5,#c86bff)\"></i>{_e(legend[1])}</span></div>"
-        )
+        out.append(_diverging_legend(legend))
     out.append('<div class="km-bars">')
     for name, input_text, value in rows:
         width = max(abs(value) / largest * 50, 1.5)
@@ -590,12 +633,794 @@ def render(data: Mapping[str, Any]) -> str:
         "model": _model,
         "prediction": _prediction,
         "analysis": _analysis,
+        "model_case_study": _case_study,
+        "monitoring": _monitoring,
+        "population": _population,
+        "comparison": _comparison,
+        "similar_cases": _similar,
+        "model_holdings": _holdings,
+        "method_comparison": _method_comparison,
         "list": _page,
     }.get(kind, _generic)
     card = f'<div class="{"km wide" if kind == "list" else "km"}">{builder(data)}</div>'
     # The stylesheet drives themes and hover; the inline copy keeps the layout where a viewer
     # drops <style> blocks (GitHub's notebook viewer does).
     return f"<style>{CSS}</style>{inline_styles(card, CSS)}"
+
+
+def _case_study(data: Mapping[str, Any]) -> str:
+    """A model's case study, compact: what it is, the facts, what each section says, and what is not on file."""
+    model = _map(data.get("model"))
+    plain = _plain  # the API sets the names of inputs and classes in backticks; a card shows them as plain words
+    out = [_head("Case study", model.get("slug"), _when(data, "generated ", key="generated_at"))]
+    out.append(f'<div class="km-result"><span class="km-title">{_e(model.get("name") or "Model")}</span></div>')
+    out.append(_say(data.get("headline")))
+    facts = _dicts(data.get("facts"))
+    out.append(_tiles((str(f.get("label") or ""), _e(f.get("value") or ""), str(f.get("note") or "")) for f in facts))
+    tones = {"ready": "ok", "stale": "warn"}
+    sections = []
+    for number, section in enumerate(_dicts(data.get("sections")), start=1):
+        status = str(section.get("status") or "")
+        label = "does not apply" if status == "missing" and section.get("applies") is False else status
+        said = f'<b>{_e(section.get("title") or section.get("key"))}</b><br><span class="km-muted">{plain(section.get("summary"))}</span>'
+        sections.append([str(number), said, _badge(label, tones.get(status, ""))])
+    if sections:
+        out.append(_table([("", "num mono muted"), ("Section", "wrap"), ("Status", "")], sections))
+    gaps = _dicts(data.get("gaps"))
+    if gaps:
+        listed = "".join(f"<li><b>{_e(gap.get('title'))}.</b> {plain(gap.get('how'))}</li>" for gap in gaps)
+        out.append(_details(f"What is not on file ({len(gaps)})", f"<ul>{listed}</ul>", open_=True))
+    link = _link(f"/models/{model['slug']}/case-study", "Open in dashboard") if model.get("slug") else ""
+    out.append(_foot("written from what is stored; nothing was run", link))
+    return "".join(out)
+
+
+# --- what a model's log says: monitoring, population, comparison, similar cases, holdings, methods ---
+#
+# Each leads with the sentence a person would say about the record, then the few numbers behind it, one
+# small picture made of plain elements, and where to look next. A status is always written out.
+
+#: The dashboard's ``VERDICT_LABEL``: what a window's drift check amounts to.
+READING_LABEL = {
+    "none": "Not enough rows",
+    "chance": "Within chance",
+    "stable": "Stable",
+    "moderate": "Moderate drift",
+    "significant": "Significant drift",
+}
+READING_TONE = {"stable": "ok", "moderate": "warn", "significant": "bad"}
+#: The dashboard's ``runsLabel``: who runs a model.
+RUNS_LABEL = {"kaimei": "Run by Kaimei", "your_endpoint": "Run by your endpoint", "your_agent": "Run by your agent", "nobody": "Run by nobody"}
+_PLURAL = {"analysis": "analyses"}
+#: Classes drawn in a colour of their own in a split bar; the rest are drawn together as "other".
+_MIX = 3
+
+
+def _plain(text: Any) -> str:
+    """A sentence from the API as plain words: it sets the names of inputs and classes in backticks."""
+    return _e(str(text or "").replace("`", ""))
+
+
+def _say(text: Any) -> str:
+    """The sentence a card leads with."""
+    said = _plain(text).strip()
+    return f'<div class="km-say">{said}</div>' if said else ""
+
+
+def _items(value: Any) -> List[Any]:
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _whole(value: Any) -> Optional[int]:
+    number = _float(value)
+    return int(number) if number is not None else None
+
+
+def _counted(count: Any, noun: str) -> str:
+    """``1 row``, ``600 rows``: a count with its noun."""
+    n = _whole(count) or 0
+    return f"{n:,} {noun if n == 1 else _PLURAL.get(noun, noun + 's')}"
+
+
+def _size(value: Any) -> str:
+    """``sizeText``: a size in plain units, base 1,000 (``734 bytes``, ``154 KB``, ``1.2 MB``); empty when not measured."""
+    number = _float(value)
+    if number is None or number < 0:
+        return ""
+    if number < 1000:
+        return f"{int(number + 0.5)} {'byte' if int(number + 0.5) == 1 else 'bytes'}"
+    units = ("KB", "MB", "GB", "TB")
+    number /= 1000
+    unit = 0
+    while number >= 999.5 and unit < len(units) - 1:
+        number /= 1000
+        unit += 1
+    return f"{int(number + 0.5) if number >= 100 else fmt_number(number, 1 if number >= 10 else 2)} {units[unit]}"
+
+
+def _psi(value: Any) -> str:
+    """``psiText``: a PSI to three decimals, to two from 1 up."""
+    number = _float(value)
+    if number is None:
+        return "—"
+    if 0 < number < 0.0005:
+        return "under 0.001"
+    return f"{number:.2f}" if number >= 1 else f"{number:.3f}"
+
+
+def _day(value: Any) -> str:
+    """A window's day: ``Nov 27``."""
+    try:
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value or "")
+    return f"{moment:%b} {moment.day}"
+
+
+def _model_link(ref: Any, tab: str = "", query: str = "") -> str:
+    """A link to one of a model's pages in the dashboard, which takes a model's id where its slug goes."""
+    return _link(f"/models/{quote(str(ref), safe='')}{tab}{query}", "Open in dashboard") if ref else ""
+
+
+def _bar(value: float, largest: float, fill: str = "share", *, signed: bool = False) -> str:
+    """One bar for a table cell: from zero, or either side of a midline when the column holds both signs."""
+    size = min(abs(value) / largest, 1.0) * (50 if signed else 100) if largest > 0 else 0.0
+    if signed:
+        left = 50.0 if value >= 0 else 50.0 - size
+        return (
+            f'<div class="km-track cell"><span class="km-zero"></span><span class="km-fill {"pos" if value >= 0 else "neg"}" '
+            f'style="left:{left:.2f}%;width:{size:.2f}%"></span></div>'
+        )
+    return f'<div class="km-track cell"><span class="km-fill {_e(fill)}" style="left:0;width:{size:.2f}%"></span></div>'
+
+
+def _legend(items: Iterable[Tuple[str, str]], note: str = "") -> str:
+    """Colour chips with what each stands for: ``items`` are ``(css class, words)``."""
+    chips = "".join(f'<span><i class="{_e(cls)}"></i>{_e(words)}</span>' for cls, words in items)
+    chips += f"<span>{_e(note)}</span>" if note else ""
+    return f'<div class="km-legend">{chips}</div>' if chips else ""
+
+
+def _reading(entry: Mapping[str, Any]) -> str:
+    """``verdictOf``: a score past a threshold counts only when it is also past what sampling alone gives."""
+    status = str(entry.get("status") or "")
+    if status == "stable":
+        return "stable"
+    if status in ("moderate", "significant"):
+        return "chance" if entry.get("beyond_chance") is False else status
+    return "none"
+
+
+def _monitoring_sentence(data: Mapping[str, Any], latest: Mapping[str, Any]) -> str:
+    """What the latest window's check found: its reading, and the leading input's PSI against its own chance level."""
+    logged, days = _whole(data.get("predictions")), _whole(data.get("days"))
+    span = f" in the last {_counted(days, 'day')}" if days else ""
+    if data.get("drift_unavailable"):
+        traffic = f"{_counted(logged, 'prediction')} logged{span}. " if logged is not None else ""
+        return f"{traffic}{data['drift_unavailable']}"
+    if not latest:
+        return f"No predictions were logged{span}." if logged == 0 else "This history has no windows to read."
+    reading = _reading(latest)
+    rows = _whole(latest.get("rows")) or 0
+    if reading == "none" or _float(latest.get("overall_psi")) is None:
+        return (
+            "Not enough rows for a drift reading in the latest window: a check compares at least 20 logged rows with at "
+            f"least 20 reference rows, and this one had {rows:,} and {_whole(data.get('reference_rows')) or 0:,}."
+        )
+    psi, chance = _psi(latest.get("overall_psi")), _float(latest.get("chance"))
+    top = str(latest.get("top_feature") or "the leading input")
+    drawn = f"{_counted(rows, 'row')} drawn from the reference data itself reach {_psi(chance)}"
+    if reading == "chance":
+        but = drawn if chance is not None else "as many rows drawn from the reference data itself score as high"
+        return f"Within chance in the latest window: {top} scores PSI {psi}, past a drift threshold, but {but}."
+    where = f", where {drawn}." if chance is not None else "."
+    if reading == "stable":
+        return f"Stable in the latest window: the highest PSI is {psi}, on {top}{where}"
+    return f"{READING_LABEL[reading]} in the latest window: {top} scores PSI {psi}{where}"
+
+
+def _monitoring(data: Mapping[str, Any]) -> str:
+    """A monitoring history: the latest window's reading, the windows as bars, and the inputs by peak PSI."""
+    series = _dicts(data.get("series"))
+    latest: Mapping[str, Any] = series[-1] if series else {}
+    reading = _reading(latest) if _float(latest.get("overall_psi")) is not None else "none"
+    unavailable = bool(data.get("drift_unavailable"))
+    window = str(data.get("window") or "window")
+    days = _whole(data.get("days"))
+    rows, reference = _whole(latest.get("rows")), _whole(data.get("reference_rows"))
+
+    out = [_head("Monitoring", data.get("model_id"), _when(data, "read ", key="until"))]
+    out.append(_say(_monitoring_sentence(data, latest)))
+    badges = [_badge("No drift reading" if unavailable else READING_LABEL[reading], "" if unavailable else READING_TONE.get(reading, ""), dot=True)]
+    if latest.get("start"):
+        badges.append(_badge(f"latest {window}: {short_date(latest['start']) if window == 'hour' else _day(latest['start'])}", mono=True))
+    if rows and reference and not unavailable:
+        badges.append(
+            _badge(f"{compact(reference)} reference vs {compact(rows)} logged rows", mono=True, title="What the latest window's check compares")
+        )
+    out.append(_badges(badges))
+
+    tiles: List[Tuple[str, str, str]] = []
+    if data.get("predictions") is not None:
+        tiles.append(("Predictions", compact(data["predictions"]), f"last {_counted(days, 'day')}" if days else ""))
+    if not unavailable and _float(latest.get("overall_psi")) is not None:
+        tiles.append(("Latest PSI", _e(_psi(latest["overall_psi"])), f"on {latest['top_feature']}" if latest.get("top_feature") else ""))
+        if _float(latest.get("chance")) is not None:
+            tiles.append(("Chance level", _e(_psi(latest["chance"])), f"what {_counted(rows, 'reference row')} reach"))
+    described = _map(_map(data.get("tape")).get("output"))
+    answered = next((w for w in reversed(series) if _float(_map(w.get("output")).get("mean")) is not None), None)
+    if answered is not None:
+        mean = _map(answered.get("output")).get("mean")
+        unit = described.get("unit") if isinstance(described.get("unit"), str) else None
+        shown = fmt_value(mean, unit) if described.get("kind") == "value" else fmt_number(mean, 3)
+        tiles.append(("Mean output", _e(shown), f"{described.get('name') or 'output'} · {_day(answered.get('start'))}"))
+    out.append(_tiles(tiles))
+
+    out.append(_window_bars(series, _map(data.get("thresholds")), window))
+    if not unavailable:
+        out.append(_monitoring_inputs(_dicts(data.get("features")), latest, _map(data.get("thresholds"))))
+    out.append(_foot("read from the log; nothing was run or stored", _model_link(data.get("model_id"), "/monitoring")))
+    return "".join(out)
+
+
+def _window_bars(series: Sequence[Mapping[str, Any]], thresholds: Mapping[str, Any], window: str) -> str:
+    """One small bar per window, oldest first: the highest PSI its check found, toned by what the check amounts to,
+    with a line at each threshold. A history without a drift reading draws the predictions logged instead."""
+    if not series:
+        return ""
+
+    def when(entry: Mapping[str, Any]) -> str:
+        return short_date(entry.get("start")) if window == "hour" else _day(entry.get("start") or "")
+
+    psis = [_float(entry.get("overall_psi")) for entry in series]
+    known = [psi for psi in psis if psi is not None]
+    bars: List[str] = []
+    lines = ""
+    if known:
+        marks = sorted(v for v in (_float(x) for x in thresholds.values()) if v is not None and v > 0)
+        top = max(known + [marks[-1] * 1.25 if marks else 0.0, 1e-9])
+        counts: Dict[str, int] = {}
+        for entry, psi in zip(series, psis):
+            reading = _reading(entry) if psi is not None else "none"
+            counts[reading] = counts.get(reading, 0) + 1
+            said = f"{when(entry)}: {READING_LABEL[reading]}"
+            if psi is not None:
+                said += f", PSI {_psi(psi)}" + (f" on {entry['top_feature']}" if entry.get("top_feature") else "")
+                said += f", chance reaches {_psi(entry['chance'])}" if _float(entry.get("chance")) is not None else ""
+            if _whole(entry.get("predictions")) is not None:
+                said += f", {_counted(entry['predictions'], 'prediction')}"
+            height = f"{max(psi / top * 100, 3):.1f}%" if psi is not None else "2px"
+            bars.append(f'<i class="km-win-bar km-tone-{reading}" style="height:{height}" title="{_e(said)}"></i>')
+        lines = "".join(f'<span class="km-win-line" style="bottom:{mark / top * 100:.1f}%"></span>' for mark in marks if mark <= top)
+        words = {"stable": "stable", "chance": "within chance", "moderate": "moderate drift", "significant": "significant drift", "none": "not enough rows"}
+        legend = _legend((f"km-tone-{r}", f"{words[r]} · {counts[r]}") for r in ("stable", "chance", "moderate", "significant", "none") if counts.get(r))
+        title = f"Highest PSI per {window}"
+        middle = " and ".join(fmt_number(mark, 3) for mark in marks)
+        middle = f"dashed lines at {middle} · tallest bar PSI {_psi(max(known))}" if marks else f"tallest bar PSI {_psi(max(known))}"
+    else:
+        logged = [_float(entry.get("predictions")) or 0.0 for entry in series]
+        most = max(logged)
+        if most <= 0:
+            return ""
+        for entry, count in zip(series, logged):
+            height = f"{max(count / most * 100, 3):.1f}%" if count > 0 else "2px"
+            said = f"{when(entry)}: {_counted(count, 'prediction')}"
+            bars.append(f'<i class="km-win-bar km-tone-{"traffic" if count > 0 else "none"}" style="height:{height}" title="{_e(said)}"></i>')
+        legend = ""
+        title = f"Predictions per {window}"
+        middle = f"busiest {window}: {_counted(most, 'prediction')}"
+    dense = " dense" if len(series) > 150 else ""
+    return (
+        f'<div class="km-h">{_e(title)}</div>{legend}<div class="km-win{dense}">{lines}{"".join(bars)}</div>'
+        f'<div class="km-axis"><span>{_e(when(series[0]))}</span><span>{_e(middle)}</span><span>{_e(when(series[-1]))}</span></div>'
+    )
+
+
+def _monitoring_inputs(features: Sequence[Mapping[str, Any]], latest: Mapping[str, Any], thresholds: Mapping[str, Any]) -> str:
+    """The inputs ranked by their peak PSI, with each one's latest PSI and what it amounts to beside its own chance level."""
+    features = [f for f in features if f.get("name")]
+    if not features:
+        return ""
+    features = sorted(features, key=lambda f: (-(_float(f.get("peak_psi")) or 0.0), -(_float(f.get("latest_psi")) or 0.0)))
+    moderate = _float(thresholds.get("moderate")) or 0.1
+    significant = _float(thresholds.get("significant")) or 0.25
+    levels = _map(latest.get("levels"))
+    largest = max([_float(f.get("peak_psi")) or 0.0 for f in features])
+    rows = []
+    for feature in features[:8]:
+        name = str(feature["name"])
+        peak, now = _float(feature.get("peak_psi")), _float(feature.get("latest_psi"))
+        status = str(feature.get("status") or "")
+        level = _float(levels.get(name))
+        if now is None or status not in ("stable", "moderate", "significant"):
+            reading = "none"
+        elif status != "stable" and level is not None and now <= level:
+            reading = "chance"
+        else:
+            reading = status
+        fill = "stable" if (peak or 0.0) < moderate else "moderate" if (peak or 0.0) < significant else "significant"
+        unit = f' <span class="km-faint">{_e(feature["unit"])}</span>' if feature.get("unit") else ""
+        rows.append(
+            [
+                f"<b>{_e(name)}</b>{unit}",
+                _e(_psi(peak)) if peak is not None else '<span class="km-faint" title="It never scored above its own chance level">—</span>',
+                _bar(peak, largest, fill) if peak else "",
+                _e(_psi(now)),
+                _badge(READING_LABEL[reading], READING_TONE.get(reading, "")),
+            ]
+        )
+    more = f" {len(features) - 8} more in monitoring.features." if len(features) > 8 else ""
+    note = (
+        '<div class="km-faint" style="margin-top:6px">Peak PSI is an input\'s highest in the windows where it scored above its own '
+        f"chance level; — means it never did.{_e(more)}</div>"
+    )
+    table = _table([("Input", "mono"), ("Peak PSI", "num mono"), ("", "bar"), ("Latest PSI", "num mono"), ("Latest reading", "")], rows)
+    return f'<div class="km-h">Inputs by peak PSI</div>{table}{note}'
+
+
+def _split_bar(counts: Mapping[str, Any], classes: Sequence[str]) -> str:
+    """A group's class mix as one bar split by class, each class in the colour the legend gives it."""
+    named = list(classes[:_MIX])
+    parts = [(f"km-mix-{index}", _float(counts.get(name)) or 0.0) for index, name in enumerate(named)]
+    other = sum(_float(value) or 0.0 for name, value in counts.items() if str(name) not in named)
+    parts.append(("km-mix-x", other))
+    said = ", ".join(f"{name}: {compact(value)}" for name, value in counts.items())
+    segments = "".join(f'<i class="{cls}" style="flex:{amount:g} 1 0%"></i>' for cls, amount in parts if amount > 0)
+    return f'<div class="km-split" title="{_e(said)}">{segments}</div>'
+
+
+def _mix_legend(classes: Sequence[str]) -> str:
+    chips = [(f"km-mix-{index}", str(name)) for index, name in enumerate(classes[:_MIX])]
+    return _legend(chips + ([("km-mix-x", "other")] if len(classes) > _MIX else []))
+
+
+def _population(data: Mapping[str, Any]) -> str:
+    """A population: how many predictions, the field that separates the answers most, and that field's groups."""
+    output = _map(data.get("output"))
+    classes = [str(c) for c in _items(output.get("classes"))]
+    fields = _dicts(data.get("fields"))
+    ranked = sorted((f for f in fields if _float(f.get("separation")) is not None), key=lambda f: -(_float(f.get("separation")) or 0.0))
+    top = ranked[0] if ranked and (_float(ranked[0].get("separation")) or 0.0) > 0 else None
+    total, shown, days = _whole(data.get("predictions")), _whole(data.get("shown")), _whole(data.get("days"))
+    values = [v for v in (_float(x) for x in _items(_map(data.get("rows")).get("value"))) if v is not None]
+    if shown is None:
+        shown = len(_items(_map(data.get("rows")).get("id"))) or total
+    span = f" in the last {_counted(days, 'day')}" if days else ""
+
+    def share(value: Any) -> str:
+        return pct(value, 1 if (_float(value) or 0.0) < 0.1 else 0)
+
+    def called(field: Mapping[str, Any]) -> str:
+        return str(field.get("name") or field.get("key") or "an unnamed field")
+
+    if not (total or shown):
+        sentence = f"No predictions were logged{span}."
+    else:
+        if total is not None and shown is not None and shown < total:
+            counted = f"the newest {shown:,} of {_counted(total, 'prediction')} logged{span}"
+        else:
+            counted = f"{_counted(total if total is not None else shown, 'prediction')} logged{span}"
+        if top is not None:
+            sentence = (
+                f"Of {counted}, {called(top)} separates the answers most: "
+                f"{share(top.get('separation'))} of their variation lies between its groups."
+            )
+        elif len(ranked) == 1:
+            sentence = f"Of {counted}, the one field ranked by how far it separates the answers ({called(ranked[0])}) accounts for none of their variation."
+        elif ranked:
+            sentence = f"Of {counted}, no field separates the answers: none of the {len(ranked)} ranked for it accounts for any of their variation."
+        else:
+            sentence = f"{counted[:1].upper()}{counted[1:]}, with no field that ranks how they group."
+
+    out = [_head("Population", data.get("model_id"), _when(data, "read ", key="until"))]
+    out.append(_say(sentence))
+    name = str(output.get("name") or "answer")
+    unit = output.get("unit") if isinstance(output.get("unit"), str) else None
+
+    def answer(value: Any) -> str:
+        return _e(fmt_value(value, unit) if output.get("kind") == "value" else fmt_number(value, 3))
+
+    tiles: List[Tuple[str, str, str]] = []
+    if total is not None or shown is not None:
+        tiles.append(("Predictions", compact(total if total is not None else shown), f"last {_counted(days, 'day')}" if days else ""))
+    if values:
+        tiles.append(("Mean answer", answer(sum(values) / len(values)), name))
+    if data.get("outcomes") is not None:
+        tiles.append(("Recorded outcomes", compact(data["outcomes"]), f"of {shown:,} shown" if shown else ""))
+    if fields:
+        tiles.append(("Fields", str(len(fields)), "they can be grouped by"))
+    out.append(_tiles(tiles))
+
+    field = top or next((f for f in fields if f.get("key") == "prediction"), None) or (fields[0] if fields else None)
+    groups = _dicts(field.get("groups"))[:12] if field is not None else []
+    if field is not None and groups:
+        kind = ", ".join(str(part) for part in (field.get("source"), field.get("unit")) if part)
+        said = f"{share(field.get('separation'))} of the variation in the answers" if _float(field.get("separation")) is not None else "the answers themselves"
+        out.append(
+            f'<div class="km-h">By {_e(called(field))} '
+            f'<span class="km-faint">{_e(kind)}{" · " if kind else ""}{_e(said)}</span></div>'
+        )
+        mixed = bool(classes) and any(_map(g.get("predicted")) for g in groups)
+        means = [_float(g.get("mean")) for g in groups]
+        largest = max([abs(m) for m in means if m is not None] + [0.0])
+        signed = any(m is not None and m < 0 for m in means)
+        rows = []
+        for group, mean in zip(groups, means):
+            cells = [f"<b>{_e(group['label'] if group.get('label') is not None else '—')}</b>", _e(compact(group.get("rows")))]
+            if mixed:
+                counts = {str(k): _float(v) or 0.0 for k, v in _map(group.get("predicted")).items()}
+                whole = sum(counts.values())
+                first = max(counts, key=lambda k: counts[k]) if whole > 0 else None
+                cells.append(_split_bar(counts, classes) if whole > 0 else "")
+                cells.append(f"{pct(counts[first] / whole)} {_e(first)}" if first is not None else "—")
+                cells.append(answer(mean) if mean is not None else "—")
+            else:
+                cells.append(_bar(mean, largest, signed=signed) if mean is not None else "")
+                cells.append(answer(mean) if mean is not None else "—")
+            rows.append(cells)
+        if mixed:
+            out.append(_mix_legend(classes))
+            columns = [("Group", "mono"), ("Rows", "num mono"), ("Predicted", "bar"), ("Most predicted", "muted"), (f"Mean {name}", "num mono")]
+        else:
+            columns = [("Group", "mono"), ("Rows", "num mono"), (f"Mean {name}", "bar"), ("", "num mono")]
+        out.append(_table(columns, rows))
+    then = [f for f in ranked if f is not field and (_float(f.get("separation")) or 0.0) > 0][:4]
+    if then:
+        chips = [_badge(f"{called(f)} {share(f.get('separation'))}", mono=True) for f in then]
+        out.append('<div class="km-h">Then</div>' + _badges(chips))
+    out.append(_foot("read from the log; nothing was run", _model_link(data.get("model_id"), "/population")))
+    return "".join(out)
+
+
+def _comparison(data: Mapping[str, Any]) -> str:
+    """Two models on the same rows: how far they agree, how each scores, and the rows they differ on most."""
+    models = (_dicts(data.get("models")) + [{}, {}])[:2]
+    names = [str(m.get("name") or m.get("slug") or unnamed) for m, unnamed in zip(models, ("The first model", "the second model"))]
+    slugs = [str(m.get("slug") or m.get("id") or unnamed) for m, unnamed in zip(models, ("first", "second"))]
+    output = _map(data.get("output"))
+    classes = [str(c) for c in _items(output.get("classes"))]
+    agreement = _map(data.get("agreement"))
+    n = _whole(data.get("compared"))
+    if n is None:
+        n = _whole(agreement.get("rows"))
+    noun = "logged prediction" if data.get("source") == "predictions" else "reference row"
+    unit = output.get("unit") if isinstance(output.get("unit"), str) else None
+    quantity = str(output.get("name") or "answer")
+    rate, same = _float(agreement.get("rate")), _whole(agreement.get("same"))
+    correlation, mean_gap = _float(agreement.get("correlation")), _float(agreement.get("mean_gap"))
+    over = f" over {_counted(n, noun)}" if n else ""
+
+    def gap(value: Any) -> str:
+        return fmt_value(value, unit) if output.get("kind") == "value" else fmt_number(value, 3)
+
+    if rate is not None and same is not None and n:
+        sentence = f"{names[0]} and {names[1]} decide {same:,} of {_counted(n, noun)} the same way ({pct(rate, 1)})."
+    elif rate is not None:
+        sentence = f"{names[0]} and {names[1]} decide {pct(rate, 1)} of the rows the same way{over}."
+    elif correlation is not None:
+        apart = f", {gap(mean_gap)} apart on average" if mean_gap is not None else ""
+        sentence = f"The answers of {names[0]} and {names[1]} correlate at {correlation:.2f}{over}{apart}."
+    elif mean_gap is not None:
+        sentence = f"The answers of {names[0]} and {names[1]} are {gap(mean_gap)} apart on average{over}."
+    else:
+        sentence = f"{names[0]} and {names[1]} were compared{over}."
+
+    out = [_head("Comparison", f"{slugs[0]} vs {slugs[1]}" if any(models) else None, _e(_counted(n, noun)) if n else "")]
+    out.append(_say(sentence))
+    badges = [_badge(f"answer: {quantity}" + (f" ({unit})" if unit else ""), "info")] if output.get("name") else []
+    if data.get("truncated"):
+        badges.append(_badge("fewer rows than the source holds", title="Past the limit, or past the time one comparison may run for"))
+    if _whole(data.get("skipped")):
+        badges.append(_badge(f"{_counted(data['skipped'], 'row')} left out", title="One of the two could not read them, or gave no number for them"))
+    out.append(_badges(badges))
+    tiles: List[Tuple[str, str, str]] = []
+    if rate is not None:
+        tiles.append(("Agreement", pct(rate, 1), f"{same:,} of {n:,} rows" if same is not None and n else "of the rows"))
+    if correlation is not None:
+        tiles.append(("Correlation", fmt_number(correlation, 3), "of the two answers"))
+    if mean_gap is not None:
+        tiles.append(("Mean gap", _e(gap(mean_gap)), f"in {quantity}"))
+    if _float(agreement.get("max_gap")) is not None:
+        tiles.append(("Largest gap", _e(gap(agreement["max_gap"])), f"in {quantity}"))
+    out.append(_tiles(tiles))
+
+    scores = (_dicts(data.get("scores")) + [{}, {}])[:2]
+    metrics = [key for key in ("accuracy", "auc", "mae", "r2") if any(key in score for score in scores)]
+    if metrics:
+        titles = {"accuracy": "Accuracy", "auc": "AUC", "mae": "MAE", "r2": "R²"}
+        rows = []
+        for index, (model, score) in enumerate(zip(models, scores)):
+            decides = ""
+            if _float(model.get("threshold")) is not None and model.get("positive") is not None:
+                decides = f"{model['positive']} from {fmt_number(model['threshold'], 3)}"
+            row = [
+                f'<i class="km-pin km-mix-{index}" style="position:static;display:inline-block;margin:0 6px -2px 0"></i>'
+                f"<b>{_e(names[index])}</b> <span class=\"km-faint km-mono\">{_e(slugs[index])}</span>"
+            ]
+            for key in metrics:
+                value = _float(score.get(key))
+                row.append("—" if value is None else pct(value, 1) if key == "accuracy" else _e(gap(value)) if key == "mae" else f"{value:.3f}")
+            row.append(_e(compact(score.get("n"))) if score.get("n") is not None else "—")
+            row.append(_e(decides))
+            rows.append(row)
+        columns = [("Model", "")] + [(titles[key], "num mono") for key in metrics] + [("Rows with truth", "num mono"), ("Decides", "muted")]
+        out.append('<div class="km-h">How each scores <span class="km-faint">on the rows whose truth is known</span></div>')
+        out.append(_table(columns, rows))
+    out.append(_comparison_rows(data, slugs, classes, gap))
+    link = _model_link(models[0].get("slug"), "/compare", f"?with={quote(str(models[1]['slug']), safe='')}" if models[1].get("slug") else "")
+    runs = f"{_counted(data['runs'], 'model run')}; " if _whole(data.get("runs")) else ""
+    out.append(_foot(f"{_e(runs)}both models were run and nothing was stored", link))
+    return "".join(out)
+
+
+def _comparison_rows(data: Mapping[str, Any], slugs: Sequence[str], classes: Sequence[str], gap: Callable[[Any], str]) -> str:
+    """The three rows the two models are furthest apart on: both answers, drawn on one line, and what really happened."""
+    columns = _map(data.get("rows"))
+    values = [_items(side) for side in _items(columns.get("values"))]
+    if len(values) != 2:
+        return ""
+    decisions = [_items(side) for side in _items(columns.get("decisions"))]
+    ids, actual = _items(columns.get("id")), _items(columns.get("actual"))
+    output = _map(data.get("output"))
+
+    def at(column: Sequence[Any], index: int) -> Any:
+        return column[index] if 0 <= index < len(column) else None
+
+    def named(position: Any) -> Optional[str]:
+        if position is None:
+            return None
+        if classes and isinstance(position, int) and not isinstance(position, bool):
+            return classes[position] if 0 <= position < len(classes) else None
+        return gap(position) if _float(position) is not None else str(position)
+
+    places = [p for p in _items(data.get("differ_most")) if isinstance(p, int) and not isinstance(p, bool)]
+    places = [p for p in places if _float(at(values[0], p)) is not None and _float(at(values[1], p)) is not None][:3]
+    if not places:
+        return ""
+    if output.get("kind") == "probability":
+        low, high = 0.0, 1.0
+    else:
+        every = [v for side in values for v in (_float(x) for x in side) if v is not None]
+        low, high = min(every), max(every)
+    span = (high - low) or 1.0
+
+    def left(value: float) -> float:
+        return min(max((value - low) / span * 100, 0.0), 100.0)
+
+    threshold = _float(output.get("threshold"))
+    mark = f'<span class="km-zero" style="left:{left(threshold):.1f}%"></span>' if threshold is not None and low <= threshold <= high else ""
+    rows = []
+    for place in places:
+        first, second = float(at(values[0], place)), float(at(values[1], place))
+        chose = [named(at(side, place)) for side in decisions] if len(decisions) == 2 else [None, None]
+        cells = [_e(at(ids, place) if at(ids, place) is not None else place)]
+        for value, choice in zip((first, second), chose):
+            cells.append(_e(gap(value)) + (f' <span class="km-muted">{_e(choice)}</span>' if choice is not None else ""))
+        a, b = left(first), left(second)
+        cells.append(
+            f'<div class="km-gap" title="{_e(slugs[0])}: {_e(gap(first))}, {_e(slugs[1])}: {_e(gap(second))}">'
+            f'<span class="km-gap-track"></span>{mark}<span class="km-gap-line" style="left:{min(a, b):.1f}%;width:{abs(b - a):.1f}%"></span>'
+            f'<i class="km-pin km-mix-0" style="left:{a:.1f}%"></i><i class="km-pin km-mix-1" style="left:{b:.1f}%"></i></div>'
+        )
+        cells.append(_e(gap(abs(second - first))))
+        truth = named(at(actual, place))
+        cells.append(_e(truth) if truth is not None else "—")
+        rows.append(cells)
+    quantity = str(output.get("name") or "answer")
+    note = f"drawn from {gap(low)} to {gap(high)}" + (f", with a line at the threshold {fmt_number(threshold, 3)}" if mark else "")
+    table = _table(
+        [("Row", "mono"), (slugs[0], "num mono fold"), (slugs[1], "num mono fold"), (quantity, "bar"), ("Gap", "num mono"), ("Actual", "muted")],
+        rows,
+    )
+    legend = _legend([("km-mix-0", slugs[0]), ("km-mix-1", slugs[1])], note)
+    return f'<div class="km-h">Where they differ most <span class="km-faint">the {len(rows)} rows furthest apart</span></div>{legend}{table}'
+
+
+def _similar(data: Mapping[str, Any]) -> str:
+    """Similar cases: the summary sentence, then each case with how near it is, what is known of it and where it differs."""
+    cases = _dicts(data.get("cases"))
+    summary = _map(data.get("summary"))
+    reference = str(data.get("source") or "reference") == "reference"
+    noun = "reference row" if reference else "logged prediction"
+    considered = _whole(data.get("considered"))
+    right = f"{len(cases)} nearest of {_counted(considered, noun)}" if considered is not None and cases else ""
+    out = [_head("Similar cases", data.get("model_id"), _e(right))]
+    sentence = summary.get("sentence")
+    if not sentence:
+        sentence = f"The {_counted(len(cases), noun)} most like this case." if cases else f"No {noun}s came back as like this case."
+    out.append(_say(sentence))
+
+    def counted(key: str, prefix: str) -> List[str]:
+        part = _map(summary.get(key))
+        counts = _map(part.get("counts"))
+        if counts:
+            return [_badge(f"{prefix} {name} · {compact(count)}", mono=True) for name, count in list(counts.items())[:4]]
+        if _float(part.get("mean")) is not None:
+            return [_badge(f"{prefix} mean {fmt_number(part['mean'], 3)} ({fmt_number(part.get('min'), 3)} to {fmt_number(part.get('max'), 3)})", mono=True)]
+        return []
+
+    badges = counted("labels", "labelled") + counted("predicted", "predicted") + counted("outcomes", "outcome")
+    nearest = _float(cases[0].get("similarity")) if cases else None
+    if nearest is not None:
+        badges.append(_badge(f"nearest {pct(nearest, 1)} alike", mono=True, title="Similarity: one less the distance, the mean gap over the inputs"))
+    out.append(_badges(badges))
+    asked = _map(data.get("input"))
+    if data.get("prediction_id"):
+        out.append(f'<div class="km-desc">Asked about prediction <span class="km-mono">{_e(data["prediction_id"])}</span>.</div>')
+    elif asked:
+        listed = " · ".join(f"{_e(k)} {_e(_input_text(v))}" for k, v in list(asked.items())[:10])
+        more = f" · and {len(asked) - 10} more" if len(asked) > 10 else ""
+        out.append(f'<div class="km-desc">Asked about <span class="km-mono">{listed}</span>{_e(more)}.</div>')
+
+    if cases:
+        rows = []
+        for case in cases[:12]:
+            similarity = _float(case.get("similarity"))
+            cells = [_e(case.get("id") if case.get("id") is not None else "—")]
+            width = f"{min(max(similarity, 0.0), 1.0) * 100:.1f}" if similarity is not None else "0"
+            cells.append(f'<div class="km-meter" style="min-width:56px"><i style="width:{width}%"></i></div>')
+            cells.append(pct(similarity, 1))
+            if reference:
+                cells.append(f"<b>{_e(_input_text(case['label']))}</b>" if case.get("label") is not None else "—")
+            else:
+                # A logged prediction is known by more, and by a long id: two lines a cell, so the table stays narrow.
+                if case.get("time"):
+                    cells[0] += f'<span class="km-note">{_date_cell(case["time"])}</span>'
+                value = f' <span class="km-faint">{fmt_number(case["value"], 3)}</span>' if _float(case.get("value")) is not None else ""
+                said = (f"<b>{_e(case['predicted'])}</b>" if case.get("predicted") is not None else "") + value or "—"
+                outcome = f"outcome {_e(_input_text(case['outcome']))}" if case.get("outcome") is not None else "outcome not recorded"
+                cells.append(f'{said}<span class="km-note">{outcome}</span>')
+            differs = [
+                f'<b>{_e(d.get("feature"))}</b> {_e(_input_text(d.get("value")))} <span class="km-faint">vs {_e(_input_text(d.get("asked")))}</span>'
+                for d in _dicts(case.get("differs"))[:3]
+                if d.get("feature") is not None
+            ]
+            same = '<span class="km-faint">the same on every input</span>' if _float(case.get("distance")) == 0 else "—"
+            cells.append(" · ".join(differs) if differs else same)
+            rows.append(cells)
+        columns = [("Row" if reference else "Prediction", "mono"), ("Similarity", ""), ("", "num mono")]
+        columns += [("Label", "")] if reference else [("Predicted", "")]
+        columns.append(("Differs most on (its value vs the asked one)", "said"))
+        out.append(_table(columns, rows))
+        if len(cases) > 12:
+            out.append(f'<div class="km-faint" style="margin-top:6px">{len(cases) - 12} more in similar.cases; similar.to_frame() has them all.</div>')
+    tab = "/predictions" if data.get("prediction_id") else "/explain"
+    out.append(_foot("compared input by input with what Kaimei holds; nothing was run", _model_link(data.get("model_id"), tab)))
+    return "".join(out)
+
+
+def _holdings(data: Mapping[str, Any]) -> str:
+    """What Kaimei holds for a model: who runs it, then what stays with you beside what Kaimei holds."""
+    runs = _map(data.get("runs"))
+    items = [item for item in _dicts(data.get("items")) if item.get("label") or item.get("key")]
+    yours = [item for item in items if item.get("held") == "no"]
+    held = [item for item in items if item.get("held") in ("yes", "partly")]
+    # An item that does not say is put on neither side: the card claims only what the record does.
+    unsaid = [item for item in items if item not in yours and item not in held]
+    out = [_head("What Kaimei holds", data.get("model_id"), _when(data, "read ", key="as_of"))]
+    out.append(_say(runs.get("sentence") or (f"Kaimei holds {len(held)} of the {len(items)} things it could hold for this model." if items else "Nothing is listed for this model.")))
+    badges = [_badge(RUNS_LABEL.get(str(runs.get("by")), title_case(runs.get("by"))), "info")] if runs.get("by") else []
+    if items:
+        badges.append(_badge(f"{len(held)} of {_counted(len(items), 'item')} held", mono=True))
+    measured = [_float(item.get("bytes")) for item in held if _float(item.get("bytes")) is not None]
+    if measured:
+        badges.append(_badge(f"{_size(sum(measured))} in {_counted(len(measured), 'measured item')}", mono=True, title="What the database stores for them; the others are not measured"))
+    out.append(_badges(badges))
+
+    def listed(item: Mapping[str, Any]) -> str:
+        count, unit = _whole(item.get("count")), item.get("unit")
+        measure = [_counted(count, str(unit))] if count and unit else []
+        if item.get("held") != "no" and _size(item.get("bytes")):
+            measure.append(_size(item.get("bytes")))
+        partly = item.get("held") == "partly"
+        text = f"<b>{_e(item.get('label') or item.get('key'))}</b>"
+        text += f'<span class="km-measure">{_e(" · ".join(measure))}</span>' if measure else ""
+        text += f" {_badge('held in part', 'warn')}" if partly else ""
+        # A whole holding is its count and size; one held in part, not at all, or without a measure needs its sentence.
+        if item.get("detail") and (partly or item.get("held") == "no" or not measure):
+            text += f'<span class="km-note">{_plain(item["detail"])}</span>'
+        return f'<div class="km-item" title="{_plain(item.get("detail"))}">{text}</div>'
+
+    if items:
+        nothing_yours = '<div class="km-item"><span class="km-note">Nothing on this list: Kaimei holds at least part of every item.</span></div>'
+        nothing_held = '<div class="km-item"><span class="km-note">Nothing on this list: Kaimei holds none of these.</span></div>'
+        out.append(
+            '<div class="km-sides">'
+            f'<div class="km-side"><div class="km-side-h">Stays with you <span class="km-faint">Kaimei holds none of it</span></div>'
+            f'{"".join(listed(item) for item in yours) or nothing_yours}</div>'
+            f'<div class="km-side"><div class="km-side-h">Held by Kaimei <span class="km-faint">stored in Kaimei\'s database</span></div>'
+            f'{"".join(listed(item) for item in held) or nothing_held}</div>'
+            "</div>"
+        )
+    if unsaid:
+        names = ", ".join(str(item.get("label") or item.get("key")) for item in unsaid)
+        out.append(f'<div class="km-faint" style="margin-top:6px">The record does not say whether Kaimei holds: {_e(names)}.</div>')
+    whens = [str(crossing.get("when")) for crossing in _dicts(data.get("crosses")) if crossing.get("when")]
+    if whens:
+        out.append(
+            '<div class="km-faint" style="margin-top:6px">What travels between your network and Kaimei is in holdings.crosses, for '
+            f"{_e(', '.join(whens))}.</div>"
+        )
+    out.append(_foot("read from what is stored; nothing was run", _model_link(data.get("model_id"), "/settings")))
+    return "".join(out)
+
+
+def _method_comparison(data: Mapping[str, Any]) -> str:
+    """Several methods on one input: whether they agree, and each one's top three inputs on one scale with its cost."""
+    explanations = _dicts(data.get("explanations"))
+    agreement = _map(data.get("agreement"))
+    costs = _dicts(data.get("costs"))
+    methods = [str(m) for m in _items(data.get("methods"))] or [str(e.get("method")) for e in explanations]
+    table = _dicts(data.get("rows"))
+    first = explanations[0] if explanations else {}
+    output = _map(first.get("output"))
+    main, sub = output_parts(output)
+    target = output.get("target_label")
+    classification = isinstance(output.get("label"), str) or bool(output.get("probabilities"))
+
+    out = [_head("Method comparison", data.get("model"), _e(_counted(len(methods), "method")) if methods else "")]
+    sentence = agreement.get("sentence")
+    if not sentence:
+        sentence = f"{_counted(len(methods), 'method')} explained the same input." if len(methods) > 1 else "There is nothing to compare: fewer than two methods explained this input."
+    out.append(_say(sentence))
+    badges = []
+    rank = _float(agreement.get("rank_correlation"))
+    how = "Spearman's rank correlation of the inputs' absolute attributions, averaged over the pairs of methods: 1 is the same order"
+    if rank is not None:
+        badges.append(_badge(f"rank agreement {rank:.2f}", mono=True, title=how))
+    elif "rank_correlation" in agreement:
+        badges.append(_badge("rank agreement not defined", title="It needs two methods and three inputs they all rank"))
+    if main != "—":
+        # A class with its probability, or a number with its unit.
+        tail = f" · {sub}" if sub and sub.endswith("%") else f" {sub}" if sub else ""
+        badges.append(_badge(f"answer {main}{tail}", "info", title="The model's answer for this input"))
+    if _whole(agreement.get("inputs")):
+        badges.append(_badge(_counted(agreement["inputs"], "input"), mono=True))
+    opposed = [str(name) for name in _items(agreement.get("opposed"))]
+    if opposed:
+        badges.append(_badge("pushed opposite ways: " + ", ".join(opposed[:3]), "warn"))
+    out.append(_badges(badges))
+
+    def top_three(index: int, method: str) -> List[Tuple[str, Optional[str], float]]:
+        explanation = explanations[index] if index < len(explanations) else {}
+        found = {str(k): _float(v) for k, v in _map(explanation.get("attributions")).items()}
+        if not found:
+            found = {str(f.get("feature")): _float(f.get("attribution")) for f in _dicts(explanation.get("top_features"))}
+        if not found:
+            found = {str(row.get("feature")): _float(_map(row.get("attributions")).get(method)) for row in table}
+        ranked = sorted(((name, value) for name, value in found.items() if value is not None), key=lambda kv: -abs(kv[1]))[:3]
+        inputs = _map(explanation.get("input"))
+        return [(name, _bar_input(inputs.get(name)), value) for name, value in ranked]
+
+    tops = [top_three(index, method) for index, method in enumerate(methods)]
+    scale = max([abs(value) for rows in tops for _, _, value in rows] + [0.0])
+    if any(tops):
+        if classification and isinstance(target, str):
+            legend = (f"pushes toward {target}", "pushes away")
+        elif classification:
+            legend = ("pushes toward the prediction", "pushes away")
+        else:
+            legend = ("pushes higher", "pushes lower")
+        out.append('<div class="km-h">Each method\'s top three <span class="km-faint">bars on one scale</span></div>' + _diverging_legend(legend))
+    for index, method in enumerate(methods):
+        cost = next((c for c in costs if c.get("method") == method), costs[index] if index < len(costs) else {})
+        chips = []
+        if cost.get("exact") is True:
+            chips.append(_badge("exact", "ok", title=str(cost.get("detail") or "")))
+        elif cost.get("exact") is False:
+            chips.append(_badge("approximate", title=str(cost.get("detail") or "")))
+        if cost.get("n_evals") is not None:
+            chips.append(_badge(f"{compact(cost['n_evals'])} model calls", mono=True))
+        if _float(cost.get("latency_ms")) is not None:
+            chips.append(_badge(f"{fmt_number(cost['latency_ms'], 0)} ms", mono=True, title="Server time"))
+        detail = f'<span class="km-faint" style="font-weight:400">{_e(cost["detail"])}</span>' if cost.get("detail") else ""
+        label = cost.get("label") or METHOD_LABEL.get(method, method)
+        out.append(f'<div class="km-method"><span>{_e(label)}</span>{"".join(chips)}{detail}</div>')
+        out.append(_diverging_bars(tops[index], scale=scale) if tops[index] else '<div class="km-faint">No attributions in this record.</div>')
+    ids = [str(e.get("id")) for e in explanations if e.get("id")]
+    left = f"{_counted(len(ids), 'explanation')} stored, one per method" if ids else ""
+    out.append(_foot(_e(left), _link(f"/explanations/{quote(ids[0], safe='')}", "Open in dashboard") if ids else ""))
+    return "".join(out)
 
 
 def _explanation(data: Mapping[str, Any]) -> str:
@@ -1268,15 +2093,23 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
             chips.append(_badge(f"{metric['name']} {fmt_number(metric.get('value'), 3)}", mono=True, title="Model metric on the reference rows"))
         return _badges(chips) + _share_bars(rows)
     if kind == "drift":
+        # A score that rows drawn from the reference data itself can reach is not shown as drift (API 1.5.0).
         features = [
-            (str(f.get("feature")), _float(f.get("psi")) or 0.0, str(f.get("status") or ""))
+            (
+                str(f.get("feature")),
+                _float(f.get("psi")) or 0.0,
+                "" if f.get("beyond_chance") is False and f.get("status") != "stable" else str(f.get("status") or ""),
+            )
             for f in _dicts(payload.get("features"))
             if f.get("feature")
         ][:limit]
         chips = []
         if _float(payload.get("overall_psi")) is not None:
             chips.append(_badge(f"PSI {fmt_number(payload['overall_psi'], 3)}", mono=True, title="Population stability index over every input"))
-        if isinstance(payload.get("status"), str):
+        if payload.get("beyond_chance") is False and payload.get("status") in ("moderate", "significant"):
+            reach = f" (up to {fmt_number(payload['chance'], 2)})" if _float(payload.get("chance")) is not None else ""
+            chips.append(_badge("within chance", title=f"As many rows drawn from the reference data itself score as high{reach}"))
+        elif isinstance(payload.get("status"), str):
             chips.append(_badge(payload["status"], STATUS_TONE.get(payload["status"], "")))
         if payload.get("reference_rows") is not None and payload.get("current_rows") is not None:
             chips.append(_badge(f"{compact(payload['reference_rows'])} reference vs {compact(payload['current_rows'])} recent rows", mono=True))
