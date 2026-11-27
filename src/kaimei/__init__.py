@@ -18,6 +18,7 @@ Then::
 from . import display
 from ._objects import APIObject, Page
 from .client import Kaimei, __version__
+from .curves import threshold_for
 from .display import mode as display_mode
 from .display import set_mode as set_display
 from .errors import (
@@ -51,5 +52,6 @@ __all__ = [
     "Page",
     "StructureError",
     "estimator_to_spec",
+    "threshold_for",
     "__version__",
 ]

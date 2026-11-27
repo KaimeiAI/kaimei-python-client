@@ -361,7 +361,23 @@ def _population_rows(data: Mapping[str, Any]) -> List[Dict[str, Any]]:
 _MONITORING_COLUMNS = ("start", "end", "predictions", "output.mean", "rows", "status", "beyond_chance", "overall_psi", "chance", "top_feature")
 
 #: A performance series' columns, the window first.
-_SERIES_COLUMNS = ("start", "end", "n", "accuracy", "auc", "precision", "recall", "f1", "macro_f1", "mae", "rmse", "r2")
+_SERIES_COLUMNS = (
+    "start",
+    "end",
+    "n",
+    "accuracy",
+    "auc",
+    "average_precision",
+    "precision",
+    "recall",
+    "f1",
+    "macro_precision",
+    "macro_recall",
+    "macro_f1",
+    "mae",
+    "rmse",
+    "r2",
+)
 
 
 def flatten(record: Mapping[str, Any], prefix: str = "") -> Dict[str, Any]:
