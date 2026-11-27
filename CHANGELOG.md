@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased (precision and recall)
+
+`set_performance_metric` and `create(performance_metric=...)` need the Kaimei API release with precision and
+recall. An older API ignores the field: `set_performance_metric` then raises `KaimeiError` saying nothing
+changed, and `create` registers the model without it. Everything else works against any API, and `pr_curve` returns `None`
+where the API sends no curve.
+
+### Added
+
+- `client.models.pr_curve(model, days=90)`: precision against recall at every threshold for a two-class model
+  whose logged predictions carry a score. `points` hold the counts and measures at each threshold;
+  `pandas.DataFrame(curve.points)` makes a table.
+- `kaimei.threshold_for(curve, min_precision=...)` or `min_recall=...`: the point that meets one target best
+  (the most recall at that precision, or the most precision at that recall). It only reads the curve; the
+  model's threshold changes only when you register a new one.
+- `client.models.set_performance_metric(model, "precision" | "recall" | None)`, and `performance_metric` on
+  `client.models.create`: what a classifier's performance checks and alerts watch in place of AUC or accuracy.
+- `kaimei.display.rows` of a performance report or insight has `average_precision`, `macro_precision` and
+  `macro_recall` columns, and a performance insight's card shows precision and recall beside the number its
+  check watches, as shares.
+
 ## 0.14.0 — 2026-11-27
 
 The new model calls below need Kaimei API 1.5.0; against an older API they raise `NotFoundError`.

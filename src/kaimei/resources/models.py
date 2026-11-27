@@ -134,8 +134,11 @@ class Models(Resource):
         metadata: Optional[Mapping[str, Any]] = None,
         structure: Optional[Mapping[str, Any]] = None,
         project_id: Optional[str] = None,
+        performance_metric: Optional[str] = None,
         **extra: Any,
     ):
+        """Register a model. ``performance_metric`` (``"precision"`` or ``"recall"``, classifiers only) is what its
+        performance checks watch instead of AUC or accuracy; see :meth:`set_performance_metric`."""
         body = {
             "name": name,
             "task": task,
@@ -150,6 +153,7 @@ class Models(Resource):
             "metadata": dict(metadata) if metadata else None,
             "structure": dict(structure) if structure else None,
             "project_id": project_id,
+            "performance_metric": performance_metric,
         }
         body.update(extra)
         return self._post("/v1/models", compact(body))
@@ -234,6 +238,34 @@ class Models(Resource):
         regression); ``series`` the headline numbers per window; ``coverage`` the share of predictions with an outcome.
         """
         return self._get(f"/v1/models/{model}/performance", {"window": window, "days": days})
+
+    def pr_curve(self, model: str, *, days: int = 90):
+        """Precision against recall at every threshold, over the last ``days`` of outcomes; ``None`` without one.
+
+        For a two-class model whose logged predictions carry a score. ``points`` (lowest threshold first) give the
+        counts ``tp``, ``fp``, ``fn``, ``tn`` and the ``precision``, ``recall`` and ``f1`` when a row counts as
+        positive at a score of at least ``threshold``; ``threshold`` is the model's own, ``prevalence`` the share of
+        positives. ``pandas.DataFrame(curve.points)`` makes a table; :func:`kaimei.threshold_for` picks a threshold.
+        The average precision is in ``performance(...).overall.average_precision``.
+        """
+        report = self.performance(model, days=days)
+        return (report.get("overall") or {}).get("pr_curve")
+
+    def set_performance_metric(self, model: str, metric: Optional[str]):
+        """Have a classifier's performance checks watch ``"precision"`` or ``"recall"`` (their macro average over
+        more than two classes) instead of AUC or accuracy; ``None`` goes back to the default.
+
+        A degradation check and its alerts then compare that number with the outcomes before, as they did AUC.
+        An API from before precision and recall ignores the field, so this raises :class:`KaimeiError` there
+        rather than leave the checks watching what they did.
+        """
+        answer = self._patch(f"/v1/models/{model}", {"performance_metric": metric})
+        if "performance_metric" not in answer:
+            raise KaimeiError(
+                "This Kaimei API does not know performance_metric, so nothing changed: its performance checks still "
+                "watch AUC or accuracy. Upgrade the API to choose precision or recall."
+            )
+        return answer
 
     def monitoring(
         self,

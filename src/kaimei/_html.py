@@ -235,7 +235,17 @@ STATUS_TONE = {
     "degraded": "bad",
     "improved": "ok",
 }
-METRIC_SHORT = {"auc": "AUC", "accuracy": "accuracy", "mae": "MAE"}
+METRIC_SHORT = {
+    "auc": "AUC",
+    "accuracy": "accuracy",
+    "precision": "precision",
+    "recall": "recall",
+    "macro_precision": "macro precision",
+    "macro_recall": "macro recall",
+    "mae": "MAE",
+}
+#: Measures written as a share of rows.
+SHARE_METRICS = frozenset({"accuracy", "precision", "recall", "macro_precision", "macro_recall"})
 #: A JSON array longer than this, or any nested one, is elided in the card's JSON view.
 _JSON_ARRAY_LIMIT = 12
 
@@ -2197,7 +2207,7 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
         current, baseline, comparison = _map(payload.get("current")), _map(payload.get("baseline")), _map(payload.get("comparison"))
 
         def figure(value: Any) -> str:
-            return pct(value, 1) if metric == "accuracy" else fmt_number(value, 3)
+            return pct(value, 1) if metric in SHARE_METRICS else fmt_number(value, 3)
 
         name = METRIC_SHORT.get(metric, metric)
         chips = []
@@ -2205,6 +2215,10 @@ def _insight_payload(kind: str, payload: Mapping[str, Any]) -> str:
             chips.append(_badge(f"{name} {figure(current[metric])} · {compact(current.get('n'))} recent", mono=True))
         if _float(baseline.get(metric)) is not None:
             chips.append(_badge(f"baseline {figure(baseline[metric])} · {compact(baseline.get('n'))}", mono=True))
+        # Precision and recall beside whatever the check watches: each says what the other hides.
+        for key in ("precision", "recall", "macro_precision", "macro_recall"):
+            if key != metric and _float(current.get(key)) is not None:
+                chips.append(_badge(f"{METRIC_SHORT[key]} {pct(current[key], 1)}", mono=True))
         status = payload.get("status")
         if isinstance(status, str):
             chips.append(_badge(status.replace("_", " "), STATUS_TONE.get(status, "")))
