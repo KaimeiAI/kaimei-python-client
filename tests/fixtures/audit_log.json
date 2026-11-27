@@ -1,0 +1,231 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "object": "audit_event",
+   "id": "evt_7da64e6e3973463e7fa6",
+   "at": "2026-11-26T23:52:29.217125Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "auth.signed_in",
+   "group": "auth",
+   "summary": "Signed in.",
+   "target": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "model_id": null,
+   "detail": {
+    "method": "password"
+   },
+   "request_id": "2ec75b10592f44c7826ff725d1dca07d"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_1e22087ec4321a6a66f3",
+   "at": "2026-11-26T23:52:28.948192Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "decision.deleted",
+   "group": "decision",
+   "summary": "Deleted the decision “APP-2026-00420” and 0 explanations of it. Reason given: Erasure request ER-2026-031.",
+   "target": {
+    "type": "decision",
+    "id": "APP-2026-00420",
+    "name": "APP-2026-00420"
+   },
+   "model_id": "mdl_credit",
+   "detail": {
+    "logged_at": "2026-11-26T23:52:28.931165+00:00",
+    "explanations": 0,
+    "reason": "Erasure request ER-2026-031",
+    "model": {
+     "name": "Credit risk scorer",
+     "version": "3"
+    },
+    "recorded_outcome": null,
+    "fingerprint": "sha256:38700a9d69783ec8c87637a7aef092e16f72c4f95cea6d8b299a793108152088"
+   },
+   "request_id": "6dcbc954e9124a9eb41375fe5f1c7faf"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_7e69f9d4f8e80d69ab3e",
+   "at": "2026-11-26T23:49:21.517954Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "decision.policy_recorded",
+   "group": "decision",
+   "summary": "Recorded what was decided for “APP-2026-00418”: approved.",
+   "target": {
+    "type": "decision",
+    "id": "APP-2026-00418",
+    "name": "APP-2026-00418"
+   },
+   "model_id": "mdl_credit",
+   "detail": {
+    "outcome": "approved",
+    "decided_by": "model",
+    "rules": [
+     "Score cut-off"
+    ]
+   },
+   "request_id": "15792b3f773340b1aac8251515cd06af"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_49cb106971e8521cc324",
+   "at": "2026-11-26T23:49:19.294485Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "retention.applied",
+   "group": "retention",
+   "summary": "The retention schedule deleted 3 decisions and 0 explanations of “Credit risk scorer”, logged before 2024-10-27.",
+   "target": {
+    "type": "model",
+    "id": "mdl_credit",
+    "name": "Credit risk scorer"
+   },
+   "model_id": "mdl_credit",
+   "detail": {
+    "decisions": 3,
+    "explanations": 0,
+    "keep_days": 760,
+    "logged_before": "2024-10-27T23:49:19.289733+00:00"
+   },
+   "request_id": "dac882b318024652b230818f6bc33b47"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_1549da1f4a8bc1695776",
+   "at": "2026-11-26T23:49:19.004946Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "hold.placed",
+   "group": "hold",
+   "summary": "Placed a hold on “Credit risk scorer”: Model under supervisory review.",
+   "target": {
+    "type": "model",
+    "id": "mdl_credit",
+    "name": "Credit risk scorer"
+   },
+   "model_id": "mdl_credit",
+   "detail": {
+    "hold": "hold_7fa8f7cf29855b6b506b",
+    "reason": "Model under supervisory review",
+    "matter": "SUP-2026-04"
+   },
+   "request_id": "3bd204323ba142f4a4ce2f5ccec994e3"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_31b8712ced43e6eb1cda",
+   "at": "2026-11-26T23:49:18.856661Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "retention.schedule_set",
+   "group": "retention",
+   "summary": "Set the records of “Turbine health · 2,000-layer net” to be deleted 183 days after they are logged.",
+   "target": {
+    "type": "retention",
+    "id": "mdl_1e80d0f59b3bac8e618e",
+    "name": "Turbine health · 2,000-layer net"
+   },
+   "model_id": "mdl_credit",
+   "detail": {
+    "keep_days": 183
+   },
+   "request_id": "247575c1489f4f009d85be39e81e0f5e"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_c4259a499cca40b91e6d",
+   "at": "2026-11-26T23:46:39.605791Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "model.updated",
+   "group": "model",
+   "summary": "Changed the tags of the model “Credit risk scorer”.",
+   "target": {
+    "type": "model",
+    "id": "mdl_credit",
+    "name": "Credit risk scorer"
+   },
+   "model_id": "mdl_credit",
+   "detail": {
+    "changed": [
+     "tags"
+    ],
+    "before": {
+     "tags": [
+      "demo",
+      "finance",
+      "tabular"
+     ]
+    },
+    "after": {
+     "tags": [
+      "credit",
+      "retail",
+      "eu-high-risk"
+     ]
+    }
+   },
+   "request_id": "2789fcb6850042daa95cd033b0d91cb4"
+  },
+  {
+   "object": "audit_event",
+   "id": "evt_2e391bbe56937d1991c9",
+   "at": "2026-11-26T23:46:39.594764Z",
+   "actor": {
+    "type": "user",
+    "id": "usr_demo",
+    "name": "Kaimei Demo (demo@kaimei.ai)"
+   },
+   "action": "api_key.created",
+   "group": "api_key",
+   "summary": "Created the API key “Scoring pipeline (km_live_2TwM…)”.",
+   "target": {
+    "type": "api_key",
+    "id": "key_dd44c358464ff8a999ec",
+    "name": "Scoring pipeline (km_live_2TwM…)"
+   },
+   "model_id": null,
+   "detail": {
+    "environment": "live",
+    "scopes": [
+     "predictions:write",
+     "decisions:write"
+    ],
+    "expires_at": null
+   },
+   "request_id": "1865789b334e4bd79f0cc51055e004dd"
+  }
+ ],
+ "total": 41,
+ "limit": 8,
+ "offset": 0,
+ "has_more": true
+}

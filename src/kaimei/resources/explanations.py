@@ -54,6 +54,14 @@ class Explanations(Resource):
     def retrieve(self, explanation_id: str) -> APIObject:
         return self._get(f"/v1/explanations/{explanation_id}")
 
+    def delete(self, explanation_id: str) -> APIObject:
+        """Delete one stored explanation. The decision it explains stays logged.
+
+        An explanation of a decision under a hold is not deleted. The audit log keeps that it was deleted
+        and by whom.
+        """
+        return self._delete(f"/v1/explanations/{explanation_id}")
+
     def list(
         self,
         *,

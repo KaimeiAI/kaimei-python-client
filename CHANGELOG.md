@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.13.0 — 2026-11-26
+
+Everything below needs Kaimei API 1.4.0. Against an older API these calls raise `NotFoundError`; everything else
+works as it did.
+
+### Added
+
+- **`client.decisions`**: decision records, for the people who answer for a model's decisions.
+  `retrieve(decision_id)` returns one logged decision and how the model reached it, found by the id it was logged
+  under: the outcome, each input's effect with the sentence that states it, what would have changed the outcome,
+  how it was computed, what a record cannot show, and a SHA-256 `fingerprint` of the stored facts.
+  `explain(decision_id)` explains a decision that is already logged, as it was logged, and returns its record.
+  `list(model=, q=, explained=)` and `iterate()` find decisions; `pdf(decision_id)` returns the record as a PDF
+  and `save_pdf(decision_id, path)` writes it. An id keeps its slashes in the address; everything else is escaped.
+- **A decision record shows as a card in a notebook**, with the API's own sentences, and `to_frame()` gives one
+  row per input's effect. A page of decisions shows as a table. A text model's record shows the text token by token,
+  each token on the colour of its effect; a picture's record says where the model looked, and its PDF
+  (`decisions.save_pdf`) holds the picture with the evidence drawn over it.
+- **`client.models.evidence(model)`** returns what Kaimei holds for a model against the requirements its guides
+  cover, requirement by requirement, with what would add the evidence that is missing. **`client.models.report`**
+  returns the model documentation report as data, `report_pdf` as a PDF and `save_report_pdf` writes it. Both show
+  as cards in a notebook, and `to_frame()` gives one row per requirement, or per finding.
+- **`client.decisions.record_policy(decision_id, outcome=, rules=)`** records what was finally decided and the
+  rules applied outside the model (a cut-off, an overlay rule, a person's review); `remove_policy` removes it. A
+  decision record gains `policy` (the outcome and each rule in a sentence, as recorded), `holds` and `history`,
+  and its card shows them. `record.explanation.reference.digest` is a SHA-256 of the reference rows an explanation
+  of a table was drawn from.
+- **`client.retention`**: `retrieve()` returns the retention schedule model by model, with what is due and what
+  is held; `set(keep_days)`, `set_for_model(model, keep_days)` and `clear_for_model(model)` change it;
+  `run(dry_run=)` applies it now or says what it would delete. `place_hold(decision= or model=, reason=, matter=)`
+  keeps records whatever the schedule says, `holds()` lists them and `release_hold(id)` releases one.
+- **`client.decisions.delete(decision_id, reason=)`** deletes a logged decision with its explanations, and
+  **`client.explanations.delete(id)`** one explanation. Both are refused while a hold covers the record.
+- **`client.audit_log`**: `list(action=, actor=, target_type=, target_id=, model=, since=, until=)` and
+  `iterate()` read who did what in the organization; `csv()` and `save_csv(path)` export it. A page of entries
+  shows as a table, and `to_frame()` gives one row per entry.
+- **`client.reason_tables`**: the approved wording for why a model decided against someone. `save_draft(model,
+  adverse_outcome=, entries=, never_state=)` creates or replaces a model's draft, `approve(table_id)` puts it in
+  force (a signed-in reviewer, admin or owner), `in_force(model)` and `draft(model)` read them, `list` gives every
+  version, and `discard` deletes a draft. A decision record's `reasons` holds the draft reasons drawn with the
+  version in force when the decision was made; `decisions.retrieve(id, reason_table="draft")` previews a draft's
+  wording on a real decision. Both show as cards in a notebook.
+- **The `reviewer` role** can be given in `organization.invite` and `organization.update_member`: it reads
+  everything, can call `decisions.explain`, and drafts and approves reason tables; nothing else that writes.
+
 ## 0.12.0 — 2026-11-25
 
 What is new needs Kaimei API 1.3.0, which adds model graphs (structures of `family: "graph"`), tensors of whole

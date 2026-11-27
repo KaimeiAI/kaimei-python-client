@@ -1,0 +1,947 @@
+{
+ "object": "evidence",
+ "model": {
+  "id": "mdl_credit",
+  "name": "Credit risk scorer",
+  "slug": "credit-risk-v3",
+  "version": "3",
+  "task": "binary_classification"
+ },
+ "checked_at": "2026-11-26T22:55:07.098392Z",
+ "fresh_days": 90,
+ "frameworks": [
+  {
+   "id": "eu-ai-act",
+   "name": "EU AI Act",
+   "citation": "Regulation (EU) 2024/1689",
+   "guide": "eu-ai-act",
+   "scope": "The Act places its heaviest obligations on high-risk AI systems, such as those that evaluate the creditworthiness of people. Whether this model is part of one, and from when the obligations apply, is for you and your counsel.",
+   "requirements": [
+    {
+     "id": "article-9",
+     "title": "Risk management",
+     "reference": "Article 9",
+     "asks": "A continuous process to identify, assess and reduce risks over the system's life.",
+     "kaimei": "Robustness and drift analyses and behaviour curves give measured evidence for the risk file.",
+     "yours": "The process, the risk decisions and their sign-off.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "robustness",
+       "label": "Robustness",
+       "status": "held",
+       "detail": "2.1% of decisions flip under 5%-σ input noise. Most fragile inputs: `credit_score`, `income`. (run today)",
+       "at": "2026-11-26T19:43:20.681313Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_407bb4910bc3e4f47890"
+      },
+      {
+       "key": "drift",
+       "label": "Drift",
+       "status": "held",
+       "detail": "Recent traffic has significant drift (PSI 0.85). Shifted inputs: `debt_to_income`, `utilization`, `employment_years`, `age`. (run today)",
+       "at": "2026-11-26T19:43:20.716159Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_79de0b70103e445824be"
+      },
+      {
+       "key": "partial_dependence",
+       "label": "Behaviour curves",
+       "status": "held",
+       "detail": "Behaviour curves for the 6 most important features. 6 respond monotonically. (run today)",
+       "at": "2026-11-26T19:43:18.760965Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_931d8aef56f092ae53cc"
+      }
+     ]
+    },
+    {
+     "id": "article-10",
+     "title": "Data governance",
+     "reference": "Article 10",
+     "asks": "Training, validation and test data that are relevant, representative and examined for possible bias.",
+     "kaimei": "Summaries of the reference data, and drift between that data and live traffic.",
+     "yours": "Examining the training data for bias.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "reference_data",
+       "label": "Reference data",
+       "status": "held",
+       "detail": "600 rows uploaded: the population explanations and drift compare against.",
+       "at": null,
+       "todo": null,
+       "page": "overview",
+       "ref": null
+      },
+      {
+       "key": "drift",
+       "label": "Drift",
+       "status": "held",
+       "detail": "Recent traffic has significant drift (PSI 0.85). Shifted inputs: `debt_to_income`, `utilization`, `employment_years`, `age`. (run today)",
+       "at": "2026-11-26T19:43:20.716159Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_79de0b70103e445824be"
+      }
+     ]
+    },
+    {
+     "id": "article-11",
+     "title": "Technical documentation",
+     "reference": "Article 11, Annex IV",
+     "asks": "A description of the system, its logic, its performance and how it is monitored.",
+     "kaimei": "Model structure, global importance, behaviour curves and learned rules, exportable as JSON, and a model documentation report as a PDF.",
+     "yours": "Writing and maintaining the documentation.",
+     "status": "partial",
+     "evidence": [
+      {
+       "key": "description",
+       "label": "Model description",
+       "status": "held",
+       "detail": "The model is described in its registration.",
+       "at": null,
+       "todo": null,
+       "page": "settings",
+       "ref": null
+      },
+      {
+       "key": "structure",
+       "label": "Model structure",
+       "status": "missing",
+       "detail": "No structure is uploaded, so the model's layers and weights are not held and cannot be exported.",
+       "at": null,
+       "todo": "Upload the model's structure with the Python client.",
+       "page": "overview",
+       "ref": null
+      },
+      {
+       "key": "global_importance",
+       "label": "Global importance",
+       "status": "held",
+       "detail": "`credit_score` is the most influential input, followed by `utilization` and `debt_to_income`. Together they carry 58% of the measured importance (permutation importance over 400 rows). (run today)",
+       "at": "2026-11-26T19:43:18.358476Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_dcb270e6503a9366fb10"
+      },
+      {
+       "key": "partial_dependence",
+       "label": "Behaviour curves",
+       "status": "held",
+       "detail": "Behaviour curves for the 6 most important features. 6 respond monotonically. (run today)",
+       "at": "2026-11-26T19:43:18.760965Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_931d8aef56f092ae53cc"
+      },
+      {
+       "key": "learned_rules",
+       "label": "Learned rules",
+       "status": "held",
+       "detail": "Higher `credit_score` decreases the probability of decline, most sharply between 563 and 612 (range 11% → 86%). (run today)",
+       "at": "2026-11-26T19:43:20.718814Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_ab83381de2d73d1f20a4"
+      }
+     ]
+    },
+    {
+     "id": "article-12",
+     "title": "Record-keeping",
+     "reference": "Articles 12, 19 and 26",
+     "asks": "Automatic logging of events over the system's life, with logs kept for at least six months.",
+     "kaimei": "Every prediction and explanation is logged with its time, model version, input and output, and can be queried through the API.",
+     "yours": "The retention schedule. Kaimei keeps records until you delete them.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "predictions",
+       "label": "Logged predictions",
+       "status": "held",
+       "detail": "196 predictions logged with time, input and output, the first 14 days ago and the latest today.",
+       "at": "2026-11-26T20:06:33.435582Z",
+       "todo": null,
+       "page": "predictions",
+       "ref": null
+      },
+      {
+       "key": "explanations",
+       "label": "Stored explanations",
+       "status": "held",
+       "detail": "18 explanations stored, the latest today.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      }
+     ]
+    },
+    {
+     "id": "article-13",
+     "title": "Transparency to deployers",
+     "reference": "Article 13",
+     "asks": "Enough information for deployers to interpret the output and use it appropriately.",
+     "kaimei": "An explanation for any prediction, with plain-English summaries for images and for every insight.",
+     "yours": "The instructions for use.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "explanations",
+       "label": "Stored explanations",
+       "status": "held",
+       "detail": "18 explanations stored, the latest today.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      },
+      {
+       "key": "global_importance",
+       "label": "Global importance",
+       "status": "held",
+       "detail": "`credit_score` is the most influential input, followed by `utilization` and `debt_to_income`. Together they carry 58% of the measured importance (permutation importance over 400 rows). (run today)",
+       "at": "2026-11-26T19:43:18.358476Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_dcb270e6503a9366fb10"
+      }
+     ]
+    },
+    {
+     "id": "article-14",
+     "title": "Human oversight",
+     "reference": "Article 14",
+     "asks": "People who can understand the output, notice problems, and decide not to use or to override it.",
+     "kaimei": "Explanations, counterfactuals and alerts in the dashboard, and a reviewer role for the people doing oversight.",
+     "yours": "Who oversees, their training and their authority.",
+     "status": "partial",
+     "evidence": [
+      {
+       "key": "reviewers",
+       "label": "People who can review",
+       "status": "missing",
+       "detail": "This is a personal workspace, with one person in it. Oversight by others takes an organization.",
+       "at": null,
+       "todo": "Move the model to an organization and invite the people who oversee it as reviewers.",
+       "page": "members",
+       "ref": null
+      },
+      {
+       "key": "decision_records",
+       "label": "Decision records",
+       "status": "held",
+       "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      }
+     ]
+    },
+    {
+     "id": "article-15",
+     "title": "Accuracy and robustness",
+     "reference": "Article 15",
+     "asks": "Appropriate, declared accuracy, and resilience to errors and inconsistencies.",
+     "kaimei": "Robustness to input noise, drift, and comparison between model versions.",
+     "yours": "Accuracy testing on your own held-out data, and the security of your systems.",
+     "status": "partial",
+     "evidence": [
+      {
+       "key": "robustness",
+       "label": "Robustness",
+       "status": "held",
+       "detail": "2.1% of decisions flip under 5%-σ input noise. Most fragile inputs: `credit_score`, `income`. (run today)",
+       "at": "2026-11-26T19:43:20.681313Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_407bb4910bc3e4f47890"
+      },
+      {
+       "key": "performance",
+       "label": "Performance against outcomes",
+       "status": "held",
+       "detail": "AUC on the latest 60 outcomes is 0.609, down from 0.868 on the 113 outcomes before them. That is worse by more than chance explains (z = -3.1). (run today)",
+       "at": "2026-11-26T19:43:20.764168Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_5fbe353eede4ff392879"
+      },
+      {
+       "key": "versions",
+       "label": "Model versions",
+       "status": "missing",
+       "detail": "This is the only version registered, so there is nothing to compare it with yet.",
+       "at": null,
+       "todo": "Register each release as a version, or a challenger as a model of its own.",
+       "page": "versions",
+       "ref": null
+      }
+     ]
+    },
+    {
+     "id": "article-72",
+     "title": "Post-market monitoring",
+     "reference": "Article 72, providers",
+     "asks": "A plan to collect and review performance data once the system is in use.",
+     "kaimei": "Drift analyses on logged traffic and performance against realised outcomes, with medium and high findings raised as alerts.",
+     "yours": "The plan and the follow-up.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "drift",
+       "label": "Drift",
+       "status": "held",
+       "detail": "Recent traffic has significant drift (PSI 0.85). Shifted inputs: `debt_to_income`, `utilization`, `employment_years`, `age`. (run today)",
+       "at": "2026-11-26T19:43:20.716159Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_79de0b70103e445824be"
+      },
+      {
+       "key": "outcomes",
+       "label": "Realised outcomes",
+       "status": "held",
+       "detail": "173 logged predictions have the real outcome attached.",
+       "at": null,
+       "todo": null,
+       "page": "performance",
+       "ref": null
+      },
+      {
+       "key": "performance",
+       "label": "Performance against outcomes",
+       "status": "held",
+       "detail": "AUC on the latest 60 outcomes is 0.609, down from 0.868 on the 113 outcomes before them. That is worse by more than chance explains (z = -3.1). (run today)",
+       "at": "2026-11-26T19:43:20.764168Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_5fbe353eede4ff392879"
+      }
+     ]
+    },
+    {
+     "id": "article-86",
+     "title": "Right to explanation",
+     "reference": "Article 86",
+     "asks": "People affected by a decision based on a high-risk system can ask for a clear and meaningful explanation of the AI's role and the main elements of the decision.",
+     "kaimei": "A decision record for each decision, found by your decision id: the outcome and the main elements behind it in plain sentences, to read or to save as a PDF.",
+     "yours": "The explanation you give the person.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "decision_records",
+       "label": "Decision records",
+       "status": "held",
+       "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      }
+     ]
+    }
+   ],
+   "summary": {
+    "requirements": 9,
+    "held": 6,
+    "partial": 3,
+    "missing": 0,
+    "sentence": "Evidence held toward 6 of 9 requirements, partly held for 3."
+   }
+  },
+  {
+   "id": "regulation-b",
+   "name": "Adverse action reasons",
+   "citation": "Equal Credit Opportunity Act and Regulation B, 12 CFR 1002",
+   "guide": "adverse-action",
+   "scope": "In the United States, a creditor that takes adverse action on a credit application gives the applicant a statement of specific reasons, or tells them they can ask for one. Whether a decision of this model is such an action is for you and your counsel.",
+   "requirements": [
+    {
+     "id": "specific-reasons",
+     "title": "Specific, principal reasons",
+     "reference": "12 CFR 1002.9(b)(2)",
+     "asks": "Specific reasons that indicate the principal reasons for the adverse action.",
+     "kaimei": "Each explanation ranks the inputs that pushed the applicant toward decline, with the size of each push, and the decision's record draws draft reasons from them in your approved wording.",
+     "yours": "The notice: its content, timing and delivery.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "decision_records",
+       "label": "Decision records",
+       "status": "held",
+       "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      },
+      {
+       "key": "reason_table",
+       "label": "Reason table",
+       "status": "held",
+       "detail": "Version 2 is in force, approved today by Kaimei Demo.",
+       "at": "2026-11-26T22:01:27.696276Z",
+       "todo": null,
+       "page": "reasons",
+       "ref": null
+      }
+     ]
+    },
+    {
+     "id": "factors-scored",
+     "title": "Reasons that describe the factors actually scored",
+     "reference": "Commentary to 12 CFR 1002.9",
+     "asks": "Reasons that relate to and accurately describe the factors actually considered or scored.",
+     "kaimei": "A reason table under change control: every input has approved wording, is never to be stated, or is held for review, so a reason is never drawn from the closest wording on a form.",
+     "yours": "The reason table's wording, and which inputs may be used at all.",
+     "status": "partial",
+     "evidence": [
+      {
+       "key": "reason_table",
+       "label": "Reason table",
+       "status": "held",
+       "detail": "Version 2 is in force, approved today by Kaimei Demo.",
+       "at": "2026-11-26T22:01:27.696276Z",
+       "todo": null,
+       "page": "reasons",
+       "ref": null
+      },
+      {
+       "key": "reason_coverage",
+       "label": "Every input decided",
+       "status": "missing",
+       "detail": "3 inputs of 9 have neither wording nor a place on the never-state list: income, utilization, loan_amount.",
+       "at": "2026-11-26T22:01:27.696276Z",
+       "todo": "Give each undecided input a reason, or put it on the never-state list, in a new version.",
+       "page": "reasons",
+       "ref": null
+      }
+     ]
+    },
+    {
+     "id": "on-the-record",
+     "title": "Reasons on the record",
+     "reference": "For audits and complaints",
+     "asks": "The same reasons for the same application, retrievable later.",
+     "kaimei": "Each explanation is stored with your application id, the model version, the method and the reference population, and its record can be read or saved by that id.",
+     "yours": "How long records are kept.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "predictions",
+       "label": "Logged predictions",
+       "status": "held",
+       "detail": "196 predictions logged with time, input and output, the first 14 days ago and the latest today.",
+       "at": "2026-11-26T20:06:33.435582Z",
+       "todo": null,
+       "page": "predictions",
+       "ref": null
+      },
+      {
+       "key": "decision_records",
+       "label": "Decision records",
+       "status": "held",
+       "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      }
+     ]
+    }
+   ],
+   "summary": {
+    "requirements": 3,
+    "held": 2,
+    "partial": 1,
+    "missing": 0,
+    "sentence": "Evidence held toward 2 of 3 requirements, partly held for 1."
+   }
+  },
+  {
+   "id": "model-risk",
+   "name": "Model risk management",
+   "citation": "SR 26-2 (US interagency guidance, which replaced SR 11-7) and PRA SS1/23",
+   "guide": "model-risk",
+   "scope": "Supervisory guidance describes model validation as conceptual soundness, outcomes analysis and ongoing monitoring. Kaimei does not replace independent validation, which is a matter of people and process; it produces evidence that validators and model owners can examine and keep.",
+   "requirements": [
+    {
+     "id": "conceptual-soundness",
+     "title": "Conceptual soundness",
+     "reference": "Does the model behave as theory and policy expect?",
+     "asks": "Evidence that the model behaves as theory and policy expect.",
+     "kaimei": "Global importance; behaviour curves with their direction and consistency; learned rules in plain English; interactions between inputs.",
+     "yours": "The judgement of whether that behaviour is sound.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "global_importance",
+       "label": "Global importance",
+       "status": "held",
+       "detail": "`credit_score` is the most influential input, followed by `utilization` and `debt_to_income`. Together they carry 58% of the measured importance (permutation importance over 400 rows). (run today)",
+       "at": "2026-11-26T19:43:18.358476Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_dcb270e6503a9366fb10"
+      },
+      {
+       "key": "partial_dependence",
+       "label": "Behaviour curves",
+       "status": "held",
+       "detail": "Behaviour curves for the 6 most important features. 6 respond monotonically. (run today)",
+       "at": "2026-11-26T19:43:18.760965Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_931d8aef56f092ae53cc"
+      },
+      {
+       "key": "learned_rules",
+       "label": "Learned rules",
+       "status": "held",
+       "detail": "Higher `credit_score` decreases the probability of decline, most sharply between 563 and 612 (range 11% → 86%). (run today)",
+       "at": "2026-11-26T19:43:20.718814Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_ab83381de2d73d1f20a4"
+      },
+      {
+       "key": "interactions",
+       "label": "Interactions",
+       "status": "held",
+       "detail": "The strongest interaction is between `income` and `loan_amount` (6% of their joint effect is non-additive). (run today)",
+       "at": "2026-11-26T19:43:20.584469Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_cd638fe9c4124b59b987"
+      }
+     ]
+    },
+    {
+     "id": "sensitivity",
+     "title": "Sensitivity and stability",
+     "reference": "Validation activity",
+     "asks": "How the model responds to small changes in its inputs.",
+     "kaimei": "How often decisions flip under small input noise, and which inputs are most fragile.",
+     "yours": "The tolerance you set for it.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "robustness",
+       "label": "Robustness",
+       "status": "held",
+       "detail": "2.1% of decisions flip under 5%-σ input noise. Most fragile inputs: `credit_score`, `income`. (run today)",
+       "at": "2026-11-26T19:43:20.681313Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_407bb4910bc3e4f47890"
+      }
+     ]
+    },
+    {
+     "id": "ongoing-monitoring",
+     "title": "Ongoing monitoring",
+     "reference": "Validation activity",
+     "asks": "Checks that the model still sees the data it was validated on.",
+     "kaimei": "Drift for every input and for the output, alerts, and traffic statistics.",
+     "yours": "The monitoring plan and its thresholds.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "predictions",
+       "label": "Logged predictions",
+       "status": "held",
+       "detail": "196 predictions logged with time, input and output, the first 14 days ago and the latest today.",
+       "at": "2026-11-26T20:06:33.435582Z",
+       "todo": null,
+       "page": "predictions",
+       "ref": null
+      },
+      {
+       "key": "drift",
+       "label": "Drift",
+       "status": "held",
+       "detail": "Recent traffic has significant drift (PSI 0.85). Shifted inputs: `debt_to_income`, `utilization`, `employment_years`, `age`. (run today)",
+       "at": "2026-11-26T19:43:20.716159Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_79de0b70103e445824be"
+      }
+     ]
+    },
+    {
+     "id": "outcomes-analysis",
+     "title": "Outcomes analysis",
+     "reference": "Validation activity",
+     "asks": "A comparison of what the model predicted with what happened.",
+     "kaimei": "Realised outcomes attached to logged predictions, with a performance analysis that flags degradation.",
+     "yours": "Collecting the outcomes, and acting on a finding.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "outcomes",
+       "label": "Realised outcomes",
+       "status": "held",
+       "detail": "173 logged predictions have the real outcome attached.",
+       "at": null,
+       "todo": null,
+       "page": "performance",
+       "ref": null
+      },
+      {
+       "key": "performance",
+       "label": "Performance against outcomes",
+       "status": "held",
+       "detail": "AUC on the latest 60 outcomes is 0.609, down from 0.868 on the 113 outcomes before them. That is worse by more than chance explains (z = -3.1). (run today)",
+       "at": "2026-11-26T19:43:20.764168Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_5fbe353eede4ff392879"
+      }
+     ]
+    },
+    {
+     "id": "benchmarking",
+     "title": "Benchmarking",
+     "reference": "Validation activity",
+     "asks": "A comparison with other models or versions.",
+     "kaimei": "Insights for two versions or two models side by side, and explanations of the same case under each.",
+     "yours": "The challenger, and what the comparison is taken to show.",
+     "status": "missing",
+     "evidence": [
+      {
+       "key": "versions",
+       "label": "Model versions",
+       "status": "missing",
+       "detail": "This is the only version registered, so there is nothing to compare it with yet.",
+       "at": null,
+       "todo": "Register each release as a version, or a challenger as a model of its own.",
+       "page": "versions",
+       "ref": null
+      }
+     ]
+    },
+    {
+     "id": "audit-trail",
+     "title": "Audit trail",
+     "reference": "Validation activity",
+     "asks": "A record of what was analysed, when, and how.",
+     "kaimei": "Every analysis is stored with its options, seed and model version, and each decision has a record with a fingerprint.",
+     "yours": "The validation report and its sign-off.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "analyses",
+       "label": "Stored analyses",
+       "status": "held",
+       "detail": "1 analysis stored with options, seed and model version, the latest today.",
+       "at": "2026-11-26T19:43:20.765578Z",
+       "todo": null,
+       "page": "insights",
+       "ref": null
+      },
+      {
+       "key": "decision_records",
+       "label": "Decision records",
+       "status": "held",
+       "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      }
+     ]
+    }
+   ],
+   "summary": {
+    "requirements": 6,
+    "held": 5,
+    "partial": 0,
+    "missing": 1,
+    "sentence": "Evidence held toward 5 of 6 requirements, none yet for 1."
+   }
+  },
+  {
+   "id": "gdpr",
+   "name": "GDPR, automated decisions",
+   "citation": "Regulation (EU) 2016/679, Articles 13 to 15 and 22",
+   "guide": "eu-ai-act",
+   "scope": "Where a decision is based solely on automated processing and has legal or similarly significant effects, Article 22 applies, and Articles 13 to 15 give people a right to meaningful information about the logic involved. Whether this model's decisions are such decisions is for you and your counsel.",
+   "requirements": [
+    {
+     "id": "meaningful-information",
+     "title": "Meaningful information about the logic involved",
+     "reference": "Articles 13 to 15, with Article 22",
+     "asks": "Meaningful information about the logic involved in an automated decision.",
+     "kaimei": "Decision records can supply the facts behind that information.",
+     "yours": "How you present it to the person.",
+     "status": "held",
+     "evidence": [
+      {
+       "key": "decision_records",
+       "label": "Decision records",
+       "status": "held",
+       "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+       "at": "2026-11-26T20:08:18.432029Z",
+       "todo": null,
+       "page": "decisions",
+       "ref": null
+      },
+      {
+       "key": "global_importance",
+       "label": "Global importance",
+       "status": "held",
+       "detail": "`credit_score` is the most influential input, followed by `utilization` and `debt_to_income`. Together they carry 58% of the measured importance (permutation importance over 400 rows). (run today)",
+       "at": "2026-11-26T19:43:18.358476Z",
+       "todo": null,
+       "page": "insights",
+       "ref": "ins_dcb270e6503a9366fb10"
+      }
+     ]
+    }
+   ],
+   "summary": {
+    "requirements": 1,
+    "held": 1,
+    "partial": 0,
+    "missing": 0,
+    "sentence": "Kaimei holds evidence toward its one requirement."
+   }
+  }
+ ],
+ "items": [
+  {
+   "key": "reference_data",
+   "label": "Reference data",
+   "status": "held",
+   "detail": "600 rows uploaded: the population explanations and drift compare against.",
+   "at": null,
+   "todo": null,
+   "page": "overview",
+   "ref": null
+  },
+  {
+   "key": "predictions",
+   "label": "Logged predictions",
+   "status": "held",
+   "detail": "196 predictions logged with time, input and output, the first 14 days ago and the latest today.",
+   "at": "2026-11-26T20:06:33.435582Z",
+   "todo": null,
+   "page": "predictions",
+   "ref": null
+  },
+  {
+   "key": "explanations",
+   "label": "Stored explanations",
+   "status": "held",
+   "detail": "18 explanations stored, the latest today.",
+   "at": "2026-11-26T20:08:18.432029Z",
+   "todo": null,
+   "page": "decisions",
+   "ref": null
+  },
+  {
+   "key": "decision_records",
+   "label": "Decision records",
+   "status": "held",
+   "detail": "17 decisions of 196 logged have a record that says how the model reached it, with a fingerprint.",
+   "at": "2026-11-26T20:08:18.432029Z",
+   "todo": null,
+   "page": "decisions",
+   "ref": null
+  },
+  {
+   "key": "outcomes",
+   "label": "Realised outcomes",
+   "status": "held",
+   "detail": "173 logged predictions have the real outcome attached.",
+   "at": null,
+   "todo": null,
+   "page": "performance",
+   "ref": null
+  },
+  {
+   "key": "analyses",
+   "label": "Stored analyses",
+   "status": "held",
+   "detail": "1 analysis stored with options, seed and model version, the latest today.",
+   "at": "2026-11-26T19:43:20.765578Z",
+   "todo": null,
+   "page": "insights",
+   "ref": null
+  },
+  {
+   "key": "global_importance",
+   "label": "Global importance",
+   "status": "held",
+   "detail": "`credit_score` is the most influential input, followed by `utilization` and `debt_to_income`. Together they carry 58% of the measured importance (permutation importance over 400 rows). (run today)",
+   "at": "2026-11-26T19:43:18.358476Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_dcb270e6503a9366fb10"
+  },
+  {
+   "key": "learned_rules",
+   "label": "Learned rules",
+   "status": "held",
+   "detail": "Higher `credit_score` decreases the probability of decline, most sharply between 563 and 612 (range 11% → 86%). (run today)",
+   "at": "2026-11-26T19:43:20.718814Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_ab83381de2d73d1f20a4"
+  },
+  {
+   "key": "partial_dependence",
+   "label": "Behaviour curves",
+   "status": "held",
+   "detail": "Behaviour curves for the 6 most important features. 6 respond monotonically. (run today)",
+   "at": "2026-11-26T19:43:18.760965Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_931d8aef56f092ae53cc"
+  },
+  {
+   "key": "interactions",
+   "label": "Interactions",
+   "status": "held",
+   "detail": "The strongest interaction is between `income` and `loan_amount` (6% of their joint effect is non-additive). (run today)",
+   "at": "2026-11-26T19:43:20.584469Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_cd638fe9c4124b59b987"
+  },
+  {
+   "key": "robustness",
+   "label": "Robustness",
+   "status": "held",
+   "detail": "2.1% of decisions flip under 5%-σ input noise. Most fragile inputs: `credit_score`, `income`. (run today)",
+   "at": "2026-11-26T19:43:20.681313Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_407bb4910bc3e4f47890"
+  },
+  {
+   "key": "drift",
+   "label": "Drift",
+   "status": "held",
+   "detail": "Recent traffic has significant drift (PSI 0.85). Shifted inputs: `debt_to_income`, `utilization`, `employment_years`, `age`. (run today)",
+   "at": "2026-11-26T19:43:20.716159Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_79de0b70103e445824be"
+  },
+  {
+   "key": "behavior",
+   "label": "Output behaviour",
+   "status": "held",
+   "detail": "On 400 reference rows the model predicts `decline` 41% of the time; 18% of cases sit within ±0.10 of the decision threshold. (run today)",
+   "at": "2026-11-26T19:43:20.748767Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_5075b28309466eab5c04"
+  },
+  {
+   "key": "performance",
+   "label": "Performance against outcomes",
+   "status": "held",
+   "detail": "AUC on the latest 60 outcomes is 0.609, down from 0.868 on the 113 outcomes before them. That is worse by more than chance explains (z = -3.1). (run today)",
+   "at": "2026-11-26T19:43:20.764168Z",
+   "todo": null,
+   "page": "insights",
+   "ref": "ins_5fbe353eede4ff392879"
+  },
+  {
+   "key": "versions",
+   "label": "Model versions",
+   "status": "missing",
+   "detail": "This is the only version registered, so there is nothing to compare it with yet.",
+   "at": null,
+   "todo": "Register each release as a version, or a challenger as a model of its own.",
+   "page": "versions",
+   "ref": null
+  },
+  {
+   "key": "structure",
+   "label": "Model structure",
+   "status": "missing",
+   "detail": "No structure is uploaded, so the model's layers and weights are not held and cannot be exported.",
+   "at": null,
+   "todo": "Upload the model's structure with the Python client.",
+   "page": "overview",
+   "ref": null
+  },
+  {
+   "key": "description",
+   "label": "Model description",
+   "status": "held",
+   "detail": "The model is described in its registration.",
+   "at": null,
+   "todo": null,
+   "page": "settings",
+   "ref": null
+  },
+  {
+   "key": "reviewers",
+   "label": "People who can review",
+   "status": "missing",
+   "detail": "This is a personal workspace, with one person in it. Oversight by others takes an organization.",
+   "at": null,
+   "todo": "Move the model to an organization and invite the people who oversee it as reviewers.",
+   "page": "members",
+   "ref": null
+  },
+  {
+   "key": "reason_table",
+   "label": "Reason table",
+   "status": "held",
+   "detail": "Version 2 is in force, approved today by Kaimei Demo.",
+   "at": "2026-11-26T22:01:27.696276Z",
+   "todo": null,
+   "page": "reasons",
+   "ref": null
+  },
+  {
+   "key": "reason_coverage",
+   "label": "Every input decided",
+   "status": "missing",
+   "detail": "3 inputs of 9 have neither wording nor a place on the never-state list: income, utilization, loan_amount.",
+   "at": "2026-11-26T22:01:27.696276Z",
+   "todo": "Give each undecided input a reason, or put it on the never-state list, in a new version.",
+   "page": "reasons",
+   "ref": null
+  }
+ ],
+ "todo": [
+  {
+   "key": "structure",
+   "label": "Model structure",
+   "status": "missing",
+   "todo": "Upload the model's structure with the Python client."
+  },
+  {
+   "key": "reviewers",
+   "label": "People who can review",
+   "status": "missing",
+   "todo": "Move the model to an organization and invite the people who oversee it as reviewers."
+  },
+  {
+   "key": "versions",
+   "label": "Model versions",
+   "status": "missing",
+   "todo": "Register each release as a version, or a challenger as a model of its own."
+  },
+  {
+   "key": "reason_coverage",
+   "label": "Every input decided",
+   "status": "missing",
+   "todo": "Give each undecided input a reason, or put it on the never-state list, in a new version."
+  }
+ ],
+ "alerts": 2,
+ "notice": "This is a check of what Kaimei stores for the model. It shows evidence you can draw on; it does not show that the model, or its use, meets any requirement, and it is not legal advice."
+}

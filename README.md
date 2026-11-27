@@ -643,6 +643,140 @@ for model in client.models.iterate():
 
 Dashboard sign-in (session token) is also supported via `client.auth.login(...)` / `client.auth.signup(...)`. Production sign-up needs a Cloudflare Turnstile token (`turnstile_token=...`), and every sign-up needs `accept_terms=True` once the person has agreed to the [Terms of Use](https://kaimei.ai/terms). Prefer creating API keys in the dashboard.
 
+## Decision records, for risk, compliance and legal
+
+Everything in this section needs Kaimei API 1.4.0 or later (`client.health().version` says which you have).
+
+A decision is a logged prediction, known by the id you logged it under. Its record says how the model reached
+it in sentences that can be filed: the outcome and the rule behind it, each input's effect, what would have
+changed the outcome, how it was computed and whether it can be reproduced, and what a record cannot show.
+
+```python
+# Log the decision under your own id, when it is made
+client.predictions.create(model="credit-risk-v3", prediction_id="APP-2026-00417", input=application, output=output)
+
+# Later, when someone asks why: explain it as it was logged, and read the record
+record = client.decisions.explain("APP-2026-00417", options={"frozen_features": ["age"]})
+print(record.outcome.sentence)       # The model gave this case a 59.5% chance of decline. That is at or above ...
+for factor in record.factors[:4]:
+    print(factor.sentence)           # Total monthly debt / monthly income (0.38) raised the chance of decline by ...
+print(record.counterfactual.sentence)
+record.to_frame()                    # one row per input's effect
+
+# The same record as a PDF, with its fingerprint on every page
+client.decisions.save_pdf("APP-2026-00417", "records/")       # records/decision-record-APP-2026-00417.pdf
+client.decisions.retrieve("APP-2026-00417").fingerprint.value  # the same value, for as long as the record is kept
+
+# Which decisions still have no explanation?
+client.decisions.list(model="credit-risk-v3", explained=False)
+```
+
+For a picture, a text or a series, `record.view.sentences` says what the model was looking at (where its evidence
+sits in the picture, which tokens or steps moved the answer and by how much), and the PDF draws it: the picture
+with the evidence over it, the text with each token on its effect's colour, the series with its effects under it.
+
+With nothing chosen, `explain` uses KernelSHAP where the model allows it, seed 0, and a counterfactual search
+for a table, so the same decision always gives the same numbers. A record states what Kaimei stored and
+computed; it does not make a decision, a notice or a filing compliant, and it is not legal advice.
+
+### Evidence by requirement, and the documentation report
+
+```python
+evidence = client.models.evidence("credit-risk-v3")
+for rule in evidence.frameworks:
+    print(rule.name, "-", rule.summary.sentence)   # EU AI Act - Evidence held toward 6 of 9 requirements, ...
+for entry in evidence.todo:
+    print(entry.label, "-", entry.todo)            # what would add the evidence that is missing
+evidence.to_frame()                                # one row per requirement
+
+client.models.save_report_pdf("credit-risk-v3", "files/")   # files/model-documentation-credit-risk-v3.pdf
+report = client.models.report("credit-risk-v3")              # the same report, as data
+```
+
+`evidence` lays what Kaimei stores for a model against the requirements its guides cover (the EU AI Act, adverse
+action reasons under Regulation B, model risk management, the GDPR's automated decisions): what each asks, the
+evidence held toward it, what is missing, and what stays with you. The report puts the model's registration, the
+latest finding of each analysis, the records held and that evidence in one document. Both report what is stored;
+neither says that a model, or its use, complies with anything.
+
+### What was decided, holds, retention and the audit log
+
+A model's answer is one part of a decision. Record the rest beside it, and the decision's record states it:
+
+```python
+client.decisions.record_policy(
+    "APP-2026-00417",
+    outcome="declined",
+    rules=[
+        {"name": "Score cut-off", "kind": "cutoff",
+         "detail": "Decline when the chance of default is 35% or more", "effect": "declined"},
+        {"name": "Recent bankruptcy", "kind": "overlay", "applied": False},
+        {"name": "Underwriter review", "kind": "manual", "by": "Senior underwriter",
+         "detail": "Upheld after checking the bureau file", "effect": "declined"},
+    ],
+)
+record = client.decisions.retrieve("APP-2026-00417")
+record.policy.sentences     # the outcome and each rule, stated as you recorded them
+record.history              # what has been done to this record, from the audit log
+```
+
+Kaimei does not apply or check those rules; it states them as recorded, with who recorded them and when.
+
+```python
+client.retention.set(760)                                    # delete records 760 days after they are logged
+client.retention.set_for_model("credit-risk-v3", 2557)       # this model keeps its records longer
+client.retention.run(dry_run=True)                           # what the schedule would delete now
+hold = client.retention.place_hold(decision="LOAN/2026/0042", reason="Customer complaint", matter="CASE-2026-0117")
+client.decisions.delete("APP-2026-00420", reason="Erasure request ER-2026-031")   # refused while a hold covers it
+
+client.audit_log.list(action="decision").to_frame()          # who did what, newest first
+client.audit_log.save_csv("audit-log.csv", since="2026-11-01")
+```
+
+With no schedule, records are kept until someone deletes them. A schedule deletes logged decisions with their
+explanations once they are older than its period; a hold keeps one decision, or every record of a model, whatever
+the schedule says. Setting the schedule and releasing a hold take a signed-in admin (or, for a hold, a
+reviewer): sign in with `client.auth.login`, or do it in the dashboard. An API key is refused. Every deletion, by a person or by the schedule, is entered in the audit log, which
+cannot be edited. How long to keep records is yours to decide with counsel.
+
+### Reason tables
+
+A reason table holds the wording your organization has approved for why a model decided against someone, and the
+inputs that must never be given as a reason. With one in force, a declined decision's record draws its draft
+reasons: the approved wording for the strongest pushes toward the decline, and what is held for a person to review.
+
+```python
+draft = client.reason_tables.save_draft(
+    "credit-risk-v3",
+    adverse_outcome="decline",
+    entries={
+        "debt_to_income": "Excessive obligations in relation to income",
+        "num_delinquencies": "Delinquent past or present credit obligations with others",
+        "credit_score": "Credit score",
+        "employment_years": "Length of employment",
+    },
+    never_state={"age": "a prohibited basis"},
+    note="First wording, from compliance.",
+)
+print(draft.coverage.unmapped)      # inputs with neither wording nor a place on the never-state list
+
+# try the wording on a real decision before anyone approves it
+preview = client.decisions.retrieve("APP-2026-00417", reason_table="draft").reasons
+for reason in preview.reasons:
+    print(reason.reason)            # Excessive obligations in relation to income, ...
+for held in preview.held:
+    print(held.sentence)            # Housing status pushed toward decline and has no approved reason. Hold for review.
+```
+
+A draft changes nothing. A reviewer, admin or owner approves it, in the dashboard or signed in with
+`client.auth.login` (an API key is refused: the table records the person who approved it). An approved version is
+never edited; approving the next one retires it, and each decision keeps the version in force when it was made.
+The wording is yours: Kaimei stores it and applies it, and does not write it.
+
+People who review decisions and build nothing can be given the `reviewer` role
+(`client.organization.invite(email=..., role="reviewer")`): they read everything, can explain a logged decision
+and save its record, draft and approve reason tables, and change nothing else.
+
 ## Resources
 
 | Attribute | Endpoints |
@@ -650,6 +784,8 @@ Dashboard sign-in (session token) is also supported via `client.auth.login(...)`
 | `client.models` | `/v1/models` |
 | `client.predictions` | `/v1/predictions` |
 | `client.explanations` | `/v1/explanations` |
+| `client.decisions` | `/v1/decisions` (records, `explain`, `pdf`, `save_pdf`) |
+| `client.reason_tables` | `/v1/reason-tables` (`save_draft`, `approve`, `in_force`, versions) |
 | `client.analyses` | `/v1/analyses` |
 | `client.insights` | `/v1/insights` |
 | `client.auth` | `/v1/auth` |

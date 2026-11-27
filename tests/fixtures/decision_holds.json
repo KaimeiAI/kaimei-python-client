@@ -1,0 +1,14 @@
+[
+ {
+  "id": "hold_cc91f6dc2af1631c92f7",
+  "scope": "decision",
+  "reason": "Customer complaint under review",
+  "matter": "CASE-2026-0117",
+  "placed_by": {
+   "type": "user",
+   "name": "Kaimei Demo",
+   "role": "owner"
+  },
+  "placed_at": "2026-11-26T23:46:34.037806Z"
+ }
+]
