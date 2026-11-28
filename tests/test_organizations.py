@@ -74,6 +74,13 @@ def test_listing_and_creating_organizations() -> None:
     assert seen[-1][2] == {"name": "Acme", "slug": "acme-risk"}
 
 
+def test_changing_the_slug_sends_only_the_slug() -> None:
+    seen: list = []
+    client = _client(seen)
+    client.organization.update(slug="acme-dev")
+    assert seen[-1][:3] == ("PATCH", "/v1/organization", {"slug": "acme-dev"})
+
+
 def test_members_and_invitations() -> None:
     seen: list = []
     client = _client(seen)

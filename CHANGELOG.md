@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.1 — 2026-11-27
+
+For Kaimei API 1.7.1. Against an older API every call works as it did.
+
+### Added
+
+- `client.organization.update(slug="...")` gives the organization a new slug, one no other organization has.
+  Owners only, and it works for a personal workspace too. Sessions and API keys keep working; anything that names
+  the workspace by its old slug, such as `client.auth.switch`, must use the new one. An older API ignores `slug`,
+  so the slug stays as it was.
+
 ## 0.16.0 — 2026-11-27
 
 For Kaimei API 1.7.0, where a model's task and framework are Kaimei's to say. Against an older API every call works
