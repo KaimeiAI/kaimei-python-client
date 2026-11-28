@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.16.1 — 2026-11-27
+
+For Kaimei API 1.7.1. Against an older API every call works as it did.
 
 ### Added
 
